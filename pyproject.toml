@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pymb3d"
+version = "0.1.0"
+description = "Mandelbulb3D re-implemented in Python: PySide6 GUI, GPU (OpenGL/OpenCL) and multi-threaded CPU (numba) ray marching"
+requires-python = ">=3.10"
+license = { text = "LGPL-2.1-only" }
+dependencies = [
+    "numpy>=1.26",
+    "numba>=0.59",
+    "polars>=0.20",
+    "PySide6>=6.6",
+    "pillow>=10",
+    "moderngl>=5.8",
+    "pyopencl>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pocl-binary-distribution"]
+
+[project.scripts]
+pymb3d = "pymb3d.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["pymb3d*"]
+
+[tool.setuptools.package-data]
+pymb3d = ["kernels/clike/*.c", "kernels/clike/*.glsl", "kernels/clike/*.cl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

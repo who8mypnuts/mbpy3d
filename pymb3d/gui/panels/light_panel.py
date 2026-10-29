@@ -1,0 +1,261 @@
+"""The Lighting panel: lights, global light settings, colours and the
+palette.  Every change here is re-shaded from the kept G-buffer, so it
+is immediate."""
+from __future__ import annotations
+
+import math
+
+import numpy as np
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ...core.lights import Lighting
+from ...render.shading import palette_lookup
+from ..scene_model import SceneModel
+from ..widgets import ColorButton, DoubleSpin, IntSpin, SliderSpin, numpy_to_pixmap
+
+
+class LightEditor(QWidget):
+    """Editor of one of the six lights."""
+
+    def __init__(self, model: SceneModel, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.model = model
+        self.index = 0
+        self._loading = False
+        form = QFormLayout(self)
+        self.selector = QComboBox()
+        for i in range(6):
+            self.selector.addItem(f"Light {i + 1}")
+        self.enabled = QCheckBox("enabled")
+        self.color = ColorButton()
+        self.amplitude = SliderSpin(1.0, 0.0, 10.0, 2, 0.1)
+        self.x_angle = SliderSpin(0.0, -180.0, 180.0, 1, 1.0)
+        self.y_angle = SliderSpin(0.0, -180.0, 180.0, 1, 1.0)
+        self.spec = QComboBox()
+        for i in range(8):
+            self.spec.addItem(f"^{2 << i}")
+        self.diff = QComboBox()
+        for name in ("standard", "squared", "half", "half squared"):
+            self.diff.addItem(name)
+        self.relative = QCheckBox("relative to the object (world space)")
+        self.shadows = QCheckBox("casts shadows")
+        row = QHBoxLayout()
+        row.addWidget(self.enabled)
+        row.addWidget(QLabel("colour"))
+        row.addWidget(self.color)
+        row.addStretch(1)
+        form.addRow(self.selector)
+        form.addRow(row)
+        form.addRow("amplitude", self.amplitude)
+        form.addRow("horizontal angle", self.x_angle)
+        form.addRow("vertical angle", self.y_angle)
+        form.addRow("specular", self.spec)
+        form.addRow("diffuse function", self.diff)
+        form.addRow(self.relative)
+        form.addRow(self.shadows)
+        self.selector.currentIndexChanged.connect(self._select)
+        self.enabled.toggled.connect(lambda v: self._set("enabled", bool(v)))
+        self.color.colorChanged.connect(lambda c: self._set("color", tuple(c)))
+        self.amplitude.valueChanged.connect(lambda v: self._set("amplitude", float(v)))
+        self.x_angle.valueChanged.connect(lambda v: self._set("x_angle", math.radians(v)))
+        self.y_angle.valueChanged.connect(lambda v: self._set("y_angle", math.radians(v)))
+        self.spec.currentIndexChanged.connect(lambda i: self._set("spec_func", int(i)))
+        self.diff.currentIndexChanged.connect(lambda i: self._set("diff_func", int(i)))
+        self.relative.toggled.connect(lambda v: self._set("relative_to_object", bool(v)))
+        self.shadows.toggled.connect(lambda v: self._set("shadows", bool(v), "render"))
+
+    def light(self):
+        return self.model.scene.lighting.lights[self.index]
+
+    def load(self) -> None:
+        self._loading = True
+        li = self.light()
+        self.enabled.setChecked(li.enabled)
+        self.color.set_rgb(li.color)
+        self.amplitude.set_silently(li.amplitude)
+        self.x_angle.set_silently(math.degrees(li.x_angle))
+        self.y_angle.set_silently(math.degrees(li.y_angle))
+        self.spec.setCurrentIndex(li.spec_func & 7)
+        self.diff.setCurrentIndex(li.diff_func & 3)
+        self.relative.setChecked(li.relative_to_object)
+        self.shadows.setChecked(li.shadows)
+        self._loading = False
+
+    def _select(self, i: int) -> None:
+        self.index = i
+        self.load()
+
+    def _set(self, attr: str, value, kind: str = "lighting") -> None:
+        if self._loading:
+            return
+        setattr(self.light(), attr, value)
+        # shadows are marched in the kernel, everything else is shading
+        if attr == "enabled" and self.model.scene.shadows:
+            kind = "render"
+        self.model.touch(kind)
+
+
+class GlobalLightEditor(QWidget):
+    SLIDERS = [
+        ("diffuse", "diffuse", 0, 300, "50 = 1.0"),
+        ("specular", "specular", 0, 300, "50 = 1.0"),
+        ("ambient", "ambient", 0, 300, "90 = 1.0"),
+        ("amb. occlusion", "amb_shadow", 0, 160, "53 = 1.0"),
+        ("colour start", "color_start", 0, 120, ""),
+        ("colour end", "color_end", 0, 120, ""),
+        ("depth fog", "depth_fog", 0, 200, "0 = none"),
+        ("fog offset", "fog_offset", 0, 255, "128 = 0"),
+        ("dynamic fog", "dyn_fog", 0, 160, "53 = off"),
+        ("gamma", "gamma", 0, 63, "32 = neutral"),
+    ]
+    COLORS = [
+        ("ambient top", "ambient_top"), ("ambient bottom", "ambient_bottom"),
+        ("background top", "depth_color_top"), ("background bottom", "depth_color_bottom"),
+        ("dynamic fog", "dyn_fog_color"),
+    ]
+    FLAGS = [
+        ("colour cycling", "color_cycling"), ("colour on orbit trap", "color_on_otrap"),
+        ("far fog", "far_fog"), ("no colour interpolation", "no_color_interpolation"),
+    ]
+
+    def __init__(self, model: SceneModel, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.model = model
+        self._loading = False
+        form = QFormLayout(self)
+        self.sliders: dict[str, SliderSpin] = {}
+        for label, attr, lo, hi, tip in self.SLIDERS:
+            s = SliderSpin(0.0, lo, hi, 0, 1.0)
+            s.setToolTip(tip)
+            s.valueChanged.connect(lambda v, a=attr: self._set(a, float(v)))
+            form.addRow(label, s)
+            self.sliders[attr] = s
+        self.colors: dict[str, ColorButton] = {}
+        grid = QGridLayout()
+        for k, (label, attr) in enumerate(self.COLORS):
+            b = ColorButton()
+            b.colorChanged.connect(lambda c, a=attr: self._set(a, tuple(c)))
+            grid.addWidget(QLabel(label), k // 2, (k % 2) * 2)
+            grid.addWidget(b, k // 2, (k % 2) * 2 + 1)
+            self.colors[attr] = b
+        form.addRow(grid)
+        self.flags: dict[str, QCheckBox] = {}
+        for label, attr in self.FLAGS:
+            c = QCheckBox(label)
+            c.toggled.connect(lambda v, a=attr: self._set(a, bool(v)))
+            form.addRow(c)
+            self.flags[attr] = c
+
+    def load(self) -> None:
+        self._loading = True
+        l = self.model.scene.lighting
+        for attr, s in self.sliders.items():
+            s.set_silently(float(getattr(l, attr)))
+        for attr, b in self.colors.items():
+            b.set_rgb(getattr(l, attr))
+        for attr, c in self.flags.items():
+            c.setChecked(bool(getattr(l, attr)))
+        self._loading = False
+
+    def _set(self, attr: str, value) -> None:
+        if self._loading:
+            return
+        setattr(self.model.scene.lighting, attr, value)
+        self.model.touch("lighting")
+
+
+class PaletteEditor(QWidget):
+    """The ten palette stops with a gradient preview."""
+
+    def __init__(self, model: SceneModel, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.model = model
+        self._loading = False
+        lay = QVBoxLayout(self)
+        self.preview = QLabel()
+        self.preview.setFixedHeight(24)
+        self.preview.setScaledContents(True)
+        lay.addWidget(self.preview)
+        grid = QGridLayout()
+        grid.addWidget(QLabel("position"), 0, 1)
+        grid.addWidget(QLabel("diffuse"), 0, 2)
+        grid.addWidget(QLabel("specular"), 0, 3)
+        self.rows = []
+        for i in range(10):
+            pos = IntSpin(0, 0, 32767)
+            dif = ColorButton()
+            spe = ColorButton()
+            pos.valueChanged.connect(lambda v, k=i: self._stop_changed(k))
+            dif.colorChanged.connect(lambda c, k=i: self._stop_changed(k))
+            spe.colorChanged.connect(lambda c, k=i: self._stop_changed(k))
+            grid.addWidget(QLabel(str(i + 1)), i + 1, 0)
+            grid.addWidget(pos, i + 1, 1)
+            grid.addWidget(dif, i + 1, 2)
+            grid.addWidget(spe, i + 1, 3)
+            self.rows.append((pos, dif, spe))
+        lay.addLayout(grid)
+        lay.addStretch(1)
+
+    def load(self) -> None:
+        self._loading = True
+        for (pos, dif, spe), stop in zip(self.rows, self.model.scene.lighting.palette):
+            pos.set_silently(stop.position)
+            dif.set_rgb(stop.diffuse)
+            spe.set_rgb(stop.specular)
+        self._loading = False
+        self._draw()
+
+    def _draw(self) -> None:
+        l: Lighting = self.model.scene.lighting
+        idx = np.linspace(0, 32767, 256)
+        dif, _ = palette_lookup(idx, l)
+        rgb = np.clip(dif * 255, 0, 255).astype(np.uint8)[None, :, :]
+        self.preview.setPixmap(numpy_to_pixmap(np.repeat(rgb, 8, axis=0)))
+
+    def _stop_changed(self, k: int) -> None:
+        if self._loading:
+            return
+        pos, dif, spe = self.rows[k]
+        stop = self.model.scene.lighting.palette[k]
+        stop.position = int(pos.value())
+        stop.diffuse = dif.rgb()
+        stop.specular = spe.rgb()
+        self._draw()
+        self.model.touch("lighting")
+
+
+class LightPanel(QWidget):
+    def __init__(self, model: SceneModel, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.model = model
+        tabs = QTabWidget()
+        self.light_editor = LightEditor(model)
+        self.global_editor = GlobalLightEditor(model)
+        self.palette_editor = PaletteEditor(model)
+        for w, name in ((self.light_editor, "Lights"), (self.global_editor, "Global"), (self.palette_editor, "Palette")):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(w)
+            tabs.addTab(scroll, name)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(tabs)
+        model.replaced.connect(self.load)
+        self.load()
+
+    def load(self) -> None:
+        self.light_editor.load()
+        self.global_editor.load()
+        self.palette_editor.load()

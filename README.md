@@ -1,2 +1,138 @@
-# mbpy3d
-Python Version of Mandelbulb3d
+# pymb3d — Mandelbulb3D in Python
+
+A re-implementation of the Mandelbulb3D fractal renderer in Python: a PySide6
+application with an interactive preview, GPU ray marching (OpenGL for the
+preview, OpenCL in double precision for final renders), a multi-threaded CPU
+fallback (numba on all cores) and an importer for Mandelbulb3D `.m3p`
+parameter files.
+
+```
+pip install -e .[dev]          # or: pip install numpy numba polars PySide6 pillow moderngl pyopencl
+python -m pymb3d                                   # the application
+python -m pymb3d "M3Parameter/MengerTrees.m3p"     # open a MB3D parameter file
+python -m pymb3d render scene.json -o out.png --width 1920 --backend opencl
+pytest                                             # the test suite
+```
+
+## How it is built
+
+```
+pymb3d/
+  core/        Scene, Camera (MB3D's conventions), lights, the kernel parameter layout
+  formulas/    the formula DSL, registry, built-in formulas, transpilers
+  kernels/     march_core.c (GLSL + OpenCL), numba_core.py (CPU), Program (per scene)
+  backends/    OpenGL, OpenCL, CPU backends + device detection
+  render/      Renderer (tiles, progress, cancellation), deferred shading, SSAO
+  io/          JSON scenes, .m3p / MB3D text parameter import, PNG metadata
+  gui/         PySide6: worker threads, controllers, panels, dialogs
+  stats/       polars timing history used to rank devices
+```
+
+### One formula source, three targets
+
+Each formula is written **once** as a small Python function on a state
+object (`pymb3d/formulas/builtin/*.py`):
+
+```python
+@formula(name="Amazing Box", params=[Param("scale", 2.0), Param("min_r", 0.5), Param("fold", 1.0)],
+         de="linear", de_scale=0.2, rstop=1024.0, scale_param="scale")
+def amazing_box(s, p):
+    f = box_fold(s.z, p.fold)
+    m = sphere_fold_mul(dot(f, f), p.scale, p.min_r)
+    s.dr = s.dr * fabs(m)
+    s.z = f * m + s.c
+```
+
+The same source
+
+* runs as plain Python (the reference the tests compare against),
+* is transpiled to C (`formulas/transpile/emit_c.py`) — valid as **GLSL 3.30**
+  for the OpenGL preview and as **OpenCL C** (double precision) for final
+  renders, with two small preludes bridging the dialects,
+* is transpiled to scalar Python (`emit_py.py`) that **numba** compiles for
+  the CPU backend.
+
+The ray marching core exists twice (`kernels/clike/march_core.c` shared by
+GLSL and OpenCL, and `kernels/numba_core.py`), function for function in the
+same order, so the three backends produce the same G-buffer: the OpenCL and
+numba results are bit-identical, OpenGL differs by single precision only
+(`tests/test_transpile.py`, `tests/test_render.py`).
+
+### Rendering pipeline
+
+1. `Program.from_scene` collects the formula slots, decides the distance
+   estimation mode (analytic *linear* for box type formulas, analytic *log*
+   for bulbs, MB3D's 4-point numerical gradient for anything mixed) and
+   generates the code.  Option values, iteration counts, camera, lights … are
+   **runtime parameters** (one flat float array, `core/params.py`), so
+   sliders never recompile a kernel.
+2. The backend marches the image in bands (progress, cancellation, live
+   display) and returns a G-buffer: depth, normal, colour index (smooth
+   iteration count), orbit trap, ray steps, DE ambient occlusion, one soft
+   shadow factor per light.
+3. `render/shading.py` shades the G-buffer with numpy, following MB3D's
+   `CalcPixelColor2`: six lights with MB3D's diffuse functions and Phong
+   specular, ambient top/bottom, the 10-stop palette with colour start/end,
+   depth fog, dynamic fog, gamma.  Screen-space ambient occlusion
+   (`render/ssao.py`) runs on the depth buffer.  Because shading is separate
+   from marching, **lighting changes re-shade the kept G-buffer instantly**.
+
+Images beyond a size limit are marched in strips (bounded memory).
+
+### Camera and parameters
+
+The camera follows MB3D: rays start on the start plane (`z_start`) and fan
+out with the field of view; distances are counted in pixel units
+(`step_width = 2.1345 / (zoom * width)`), the DE stop is in pixels and grows
+with the distance from the camera, the raystep multiplier, the binary search
+refinement, the step limiter and the colour/DE-stop coupling heuristics of
+`GetMCTparasFromHeader` are ported.  `.m3p` files therefore load with their
+camera, iteration settings, lights and palette (`io/m3p.py`); all 80 example
+parameter files of MB3D parse, those using only the formulas implemented
+here render to MB3D's look.
+
+### GUI
+
+* Preview: left drag rotates, right drag pans, wheel moves forward/back,
+  Shift+wheel zooms, WASD/QE/arrows/+/- move, double click centres a surface
+  point.  A coarse pass renders while interacting, the full preview after.
+* Every change is a signal on the `SceneModel`; the preview controller
+  debounces requests and the render worker (a `QObject` in its own
+  `QThread`, one per backend) cancels a running render when a newer request
+  arrives ("latest wins").  The UI thread never blocks.
+* The final render window uses its own worker thread and the chosen precise
+  device, shows rows as they arrive and saves PNG (with the scene embedded as
+  metadata, so a PNG can be opened as a scene again) or JPEG.
+* `Edit > Paste parameters` accepts MB3D text parameters
+  (`Mandelbulb3Dv18{...}`) or pymb3d JSON from the clipboard.
+
+### Devices
+
+`backends/detect.py` lists the numba CPU backend, every OpenCL device (with
+`cl_khr_fp64` where available) and an OpenGL 3.3 context (EGL/GLX on Linux,
+WGL on Windows, CGL on macOS through moderngl).  Defaults: preview on OpenGL
+of a real GPU, final render on an OpenCL GPU with double precision, the CPU
+otherwise; software OpenGL (llvmpipe) and CPU OpenCL runtimes (pocl) are
+available but ranked below numba.  `PYMB3D_BACKEND=cpu|opencl|opengl`
+forces a backend.  Render timings are recorded with polars
+(`stats/benchmark.py`, `~/.cache/pymb3d/render_history.parquet`) and shown
+on the Info tab.  Generated numba modules are cached in
+`~/.cache/pymb3d/gen` (`PYMB3D_CACHE` overrides the location), so a formula
+combination compiles once per machine.
+
+## Formulas included
+
+MB3D's internal formulas ported from `formulas.pas`: Integer Power (2..8),
+Real Power, Quaternion, Tricorn, Amazing Box, Bulbox, Folding Int Pow,
+Aexion C; plus Mandelbulb IQ, Amazing Surf, ABox Mod, Menger3, Sierpinski3,
+Octahedral KIFS and a Sphere Inversion transform.  MB3D's 460 custom
+`.m3f` formulas are x86 machine code and cannot run here; the popular ones
+are being re-implemented natively (names match the `.m3f` files so `.m3p`
+files find them).
+
+## Not yet ported (next steps)
+
+DE combinations, interpolation hybrids, dIFS, inside rendering, positional
+lights and light maps, background pictures, depth of field, volumetric
+light, Monte Carlo rendering, animation, more `.m3f` formulas, a
+wgpu/WebGPU backend.
