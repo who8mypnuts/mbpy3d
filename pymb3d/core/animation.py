@@ -110,7 +110,8 @@ class Keyframe:
 class Animation:
     keyframes: list[Keyframe] = field(default_factory=list)
     fps: float = 25.0
-    #: "linear" or "ease" (smooth start and end between keyframes)
+    #: "linear", "ease" (smooth start and end between keyframes) or
+    #: "spline" (a Catmull-Rom curve through all keyframes)
     easing: str = "linear"
 
     # ----------------------------------------------------------- keyframes
@@ -161,6 +162,14 @@ class Animation:
         value_cols = [c for c in df.columns if c != "frame"]
         if not value_cols:
             return df
+        if self.easing == "spline" and keys.height >= 3:
+            kf = np.array(keys["frame"].to_list(), dtype=float)
+            out = {"frame": list(range(n))}
+            xs = np.arange(n, dtype=float)
+            for c in value_cols:
+                ys = np.array(keys[c].fill_null(strategy="forward").fill_null(strategy="backward").to_list(), dtype=float)
+                out[c] = catmull_rom(kf, ys, xs).tolist()
+            return pl.DataFrame(out)
         if self.easing == "ease":
             # ease by re-parametrising the frame position between keyframes
             kf = keys["frame"].to_list()
@@ -201,7 +210,12 @@ class Animation:
                     flat[c] = int(round(v)) if isinstance(flat[c], int) else float(v)
         # zoom logarithmically, rotation by slerp
         z0, z1 = float(prev.scene["camera"]["zoom"]), float(nxt.scene["camera"]["zoom"])
-        flat["camera.zoom"] = math.exp(math.log(max(z0, 1e-300)) * (1 - t) + math.log(max(z1, 1e-300)) * t)
+        if self.easing == "spline" and len(keys) >= 3:
+            kf = np.array([k.frame for k in keys], dtype=float)
+            lz = np.array([math.log(max(float(k.scene["camera"]["zoom"]), 1e-300)) for k in keys])
+            flat["camera.zoom"] = math.exp(float(catmull_rom(kf, lz, np.array([float(frame)]))[0]))
+        else:
+            flat["camera.zoom"] = math.exp(math.log(max(z0, 1e-300)) * (1 - t) + math.log(max(z1, 1e-300)) * t)
         q = slerp(quat_from_matrix(np.array(prev.scene["camera"]["vgrads"])),
                   quat_from_matrix(np.array(nxt.scene["camera"]["vgrads"])), t)
         m = matrix_from_quat(q)
@@ -237,3 +251,23 @@ def _eased_position(frame: int, key_frames: list[int]) -> float:
     t = (frame - prev) / (nxt - prev)
     t = t * t * (3 - 2 * t)
     return prev + t * (nxt - prev)
+
+
+def catmull_rom(xk: np.ndarray, yk: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """A Catmull-Rom spline through the points (xk, yk), evaluated at x
+    (clamped to the ends; linear with fewer than three points)."""
+    if len(xk) < 3:
+        return np.interp(x, xk, yk)
+    x = np.clip(x, xk[0], xk[-1])
+    idx = np.clip(np.searchsorted(xk, x, side="right") - 1, 0, len(xk) - 2)
+    x0, x1 = xk[idx], xk[idx + 1]
+    t = np.where(x1 > x0, (x - x0) / np.maximum(x1 - x0, 1e-12), 0.0)
+    p1, p2 = yk[idx], yk[idx + 1]
+    p0 = yk[np.maximum(idx - 1, 0)]
+    p3 = yk[np.minimum(idx + 2, len(yk) - 1)]
+    # tangents scaled for non uniform spacing (finite differences)
+    h = x1 - x0
+    m1 = np.where(idx > 0, (p2 - p0) / np.maximum(xk[np.minimum(idx + 1, len(xk) - 1)] - xk[np.maximum(idx - 1, 0)], 1e-12), (p2 - p1) / np.maximum(h, 1e-12)) * h
+    m2 = np.where(idx + 2 < len(xk), (p3 - p1) / np.maximum(xk[np.minimum(idx + 2, len(xk) - 1)] - x0, 1e-12), (p2 - p1) / np.maximum(h, 1e-12)) * h
+    t2, t3 = t * t, t * t * t
+    return (2 * t3 - 3 * t2 + 1) * p1 + (t3 - 2 * t2 + t) * m1 + (-2 * t3 + 3 * t2) * p2 + (t3 - t2) * m2

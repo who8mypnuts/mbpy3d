@@ -89,3 +89,33 @@ def gen_ifs(s, p):
     v = rot_apply(v, p.rot_m0, p.rot_m1, p.rot_m2, p.rot_m3, p.rot_m4, p.rot_m5, p.rot_m6, p.rot_m7, p.rot_m8)
     s.dr = s.dr * fabs(p.scale)
     s.z = v * p.scale + s.c
+
+
+@formula(
+    name="_RotateC",
+    params=[*rotation_params("rot", "rotation C")],
+    de="none",
+    rstop=1024.0,
+    category="transforms",
+    description="MB3D's _RotateC: rotates the constant C added by the formulas.",
+    aliases=("rotatec",),
+    counted=False,
+)
+def rotate_c(s, p):
+    s.c = rot_apply(s.c, p.rot_m0, p.rot_m1, p.rot_m2, p.rot_m3, p.rot_m4, p.rot_m5, p.rot_m6, p.rot_m7, p.rot_m8)
+
+
+@formula(
+    name="_Translate",
+    params=[Param("x_add", 0.0, "real", "X add", mb3d_name="X add"),
+            Param("y_add", 0.0, "real", "Y add", mb3d_name="Y add"),
+            Param("z_add", 0.0, "real", "Z add", mb3d_name="Z add")],
+    de="none",
+    rstop=1024.0,
+    category="transforms",
+    description="MB3D's _Translate: moves the point.",
+    aliases=("translate",),
+    counted=False,
+)
+def translate(s, p):
+    s.z = s.z + vec3(p.x_add, p.y_add, p.z_add)

@@ -23,7 +23,18 @@ __kernel void march_kernel(__constant const real *P, __global real *out, const i
     out[o + G_AO] = g.ao;
     for (i = 0; i < MAX_LIGHTS; i += 1) out[o + G_SHADOW + i] = g.shadow[i];
     out[o + G_ITER] = g.iter;
-    out[o + G_DE] = g.de;
+    out[o + G_ROUGH] = g.rough;
+    out[o + G_VOL] = g.vol;
+    out[o + G_R_DEPTH] = g.r_depth;
+    out[o + G_R_NX] = g.r_normal.x;
+    out[o + G_R_NY] = g.r_normal.y;
+    out[o + G_R_NZ] = g.r_normal.z;
+    out[o + G_R_COLOR] = g.r_color;
+    out[o + G_R_OTRAP] = g.r_otrap;
+    out[o + G_R_AO] = g.r_ao;
+    for (i = 0; i < MAX_LIGHTS; i += 1) out[o + G_R_SHADOW + i] = g.r_shadow[i];
+    out[o + G_R_STEPS] = g.r_steps;
+    out[o + 31] = 0.0;
 }
 
 /* Iterates one formula slot on a buffer of states (the transpiler tests):

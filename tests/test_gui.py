@@ -178,3 +178,102 @@ def test_render_dialog_data_round_trip(app, tmp_path):
     g, back = load_gbuffer(p)
     assert g.shape == dlg.result.gbuffer.shape and back.width == 40
     dlg.close()
+
+
+def test_navigator_dialog(window):
+    from pymb3d.gui.navigator import NavigatorDialog
+
+    wait_until(lambda: len(window._test_results) >= 1)
+    dlg = NavigatorDialog(window.model, CPU, window)
+    dlg.width_spin.setValue(64)
+    dlg.show()
+    results = []
+    dlg.controller.result_ready.connect(lambda r: results.append(r))
+    wait_until(lambda: len(results) >= 1, timeout=120)
+    mid0 = dlg.scene.camera.mid.copy()
+    dlg._move(0, 0, 1)
+    assert not np.allclose(dlg.scene.camera.mid, mid0)
+    dlg._turn(1, 0, 0)
+    assert np.allclose(window.model.scene.camera.mid, dlg.scene.camera.mid)  # live transfer
+    dlg.live.setChecked(False)
+    dlg._zoom(2.0)
+    assert window.model.scene.camera.zoom != dlg.scene.camera.zoom
+    dlg._apply_to_main()
+    assert window.model.scene.camera.zoom == dlg.scene.camera.zoom
+    dlg.fly.setChecked(True)
+    dlg._fly_tick()
+    dlg.fly.setChecked(False)
+    dlg.close()
+
+
+def test_post_panel_and_focus_pick(window):
+    wait_until(lambda: len(window._test_results) >= 1)
+    window.post_panel.contrast.spin.setValue(0.3)
+    assert window.model.scene.post.contrast == 0.3
+    window.post_panel.dof.setChecked(True)
+    assert window.model.scene.post.dof
+    window.render_panel.smooth_normals.setValue(2)
+    assert window.model.scene.smooth_normals == 2
+    window.render_panel.inside.setCurrentIndex(1)
+    assert window.model.scene.inside_mode == 1
+    window.formula_panel.ipol.setChecked(True)
+    assert window.model.scene.interpolation is not None
+    window.formula_panel.ipol.setChecked(False)
+    assert window.model.scene.interpolation is None
+
+
+def test_mutagen_and_batch(window, tmp_path):
+    from pymb3d.core.mutagen import mutate, random_palette
+    from pymb3d.gui.mutagen_dialog import MutagenDialog
+    from pymb3d.gui.batch_dialog import BatchDialog
+    from pymb3d.io import save_scene
+
+    wait_until(lambda: len(window._test_results) >= 1)
+    m = mutate(window.model.scene, 0.5)
+    assert m.slots[0].name == window.model.scene.slots[0].name
+    assert len(random_palette()) == 10
+    dlg = MutagenDialog(window.model, CPU, window)
+    dlg.show()
+    wait_until(lambda: dlg._current is None and not dlg._queue, timeout=180)
+    dlg._pick(0)
+    assert window.model.scene.width == 96 or window.model.scene.width > 0
+    dlg.close()
+    sc = window.model.scene.copy()
+    sc.width, sc.height = 32, 24
+    p = tmp_path / "a.json"
+    save_scene(sc, p)
+    b = BatchDialog(CPU, window)
+    b.list.addItem(str(p))
+    b.out_dir.setText(str(tmp_path / "out"))
+    b._start()
+    wait_until(lambda: b._thread is None, timeout=120)
+    assert (tmp_path / "out" / "a.png").exists()
+    b.close()
+
+
+def test_stereo_render(cpu_backend):
+    from pymb3d.core.scene import default_scene
+    from pymb3d.render import Renderer
+    from pymb3d.render.stereo import render_stereo
+
+    sc = default_scene()
+    sc.width, sc.height = 24, 16
+    sc.camera.z_start, sc.camera.zoom = -2.0, 1.4
+    img = render_stereo(Renderer(cpu_backend), sc, "side by side", 10.0)
+    assert img.shape == (16, 48, 3)
+    assert render_stereo(Renderer(cpu_backend), sc, "anaglyph", 10.0).shape == (16, 24, 3)
+
+
+def test_png16_round_trip(tmp_path):
+    from PIL import Image
+    from pymb3d.gui.render_dialog import save_image
+    from pymb3d.core.scene import default_scene
+
+    img = np.random.default_rng(0).random((6, 5, 3)).astype(np.float32)
+    p = tmp_path / "x16.png"
+    save_image(p, img, default_scene(), bits=16)
+    with Image.open(p) as im:
+        assert im.mode == "RGB" and im.size == (5, 6)
+        assert "pymb3d-scene" in (im.text or {})
+        arr = np.asarray(im.convert("RGB"))
+    assert np.abs(arr.astype(int) - np.rint(img * 255)).max() <= 1

@@ -34,9 +34,12 @@ def load_scene(path: str | Path) -> tuple[Scene, list[str]]:
         from .m3p import load
 
         res = load(p)
+        res.scene.base_dir = str(p.parent)
         return res.scene, res.warnings
     data = json.loads(p.read_text())
-    return Scene.from_dict(data), []
+    sc = Scene.from_dict(data)
+    sc.base_dir = str(p.parent)
+    return sc, []
 
 
 def scene_from_clipboard_text(text: str) -> tuple[Scene, list[str]]:

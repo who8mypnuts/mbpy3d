@@ -65,3 +65,23 @@ def test_render_animation(cpu_backend, tmp_path):
     files = render_animation(anim, cpu_backend, tmp_path, progress=lambda k, n, f, m: calls.append((k, n)))
     assert len(files) == 3 and all(f.exists() for f in files)
     assert calls and calls[-1][1] == 3
+
+
+def test_spline_interpolation():
+    from pymb3d.core.animation import catmull_rom
+
+    xk = np.array([0.0, 10.0, 20.0, 30.0])
+    yk = np.array([0.0, 1.0, 0.0, 1.0])
+    y = catmull_rom(xk, yk, np.array([0.0, 5.0, 10.0, 25.0, 30.0]))
+    assert np.allclose(y[[0, 2, 4]], [0.0, 1.0, 1.0])
+    assert 0.0 < y[1] < 1.0
+    a = default_scene()
+    anim = Animation(easing="spline")
+    for f, z in ((0, 1.0), (10, 2.0), (20, 8.0)):
+        b = a.copy()
+        b.camera.zoom = z
+        b.iterations = 10 + f
+        anim.set_keyframe(f, b)
+    mid = anim.scene_at(10)
+    assert math.isclose(mid.camera.zoom, 2.0, rel_tol=1e-6) and mid.iterations == 20
+    assert 1.0 < anim.scene_at(5).camera.zoom < 2.0

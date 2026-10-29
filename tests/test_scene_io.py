@@ -143,3 +143,27 @@ def test_lighting_presets(tmp_path):
     l = load_lighting(p)
     assert l.ambient_top == (0.9, 0.1, 0.1)
     assert len(l.lights) == 6 and len(l.palette) == 10
+
+
+def test_m3p_export_new_fields():
+    from pymb3d.io.m3p_write import write
+    from pymb3d.io.m3p import parse
+
+    sc = default_scene()
+    sc.slots = [FormulaSlot("Integer Power", 1, {}), FormulaSlot("Amazing Box", 1, {})]
+    sc.interpolation = (0.25, 0.75)
+    sc.inside_mode = 2
+    sc.smooth_normals = 4
+    sc.step_sub_de_stop = True
+    sc.post.dof = True
+    sc.post.dof_focus = 0.4
+    sc.lighting.roughness = 100
+    sc.lighting.bg_image = "sky.jpg"
+    sc.lighting.bg_direct = True
+    sc.lighting.bg_ambient = True
+    back = parse(write(sc)).scene
+    assert back.interpolation is not None and abs(back.interpolation[1] - 0.75) < 1e-6
+    assert back.inside_mode == 2 and back.smooth_normals == 4 and back.step_sub_de_stop
+    assert back.post.dof and abs(back.post.dof_focus - 0.4) < 1e-6
+    assert back.lighting.roughness == 100 and back.lighting.bg_image == "sky.jpg"
+    assert back.lighting.bg_direct and back.lighting.bg_ambient

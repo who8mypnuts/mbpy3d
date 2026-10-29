@@ -72,7 +72,7 @@ def test_opencl_precision_probe(opencl_backend):
     sw0 = float(P[PL.P_STEP_WIDTH])
     dn = d / np.linalg.norm(d)
     for _ in range(200):
-        r = mod.calc_de(point[0], point[1], point[2], 1e-6, P)
+        r = mod.calc_de(point[0], point[1], point[2], 1e-6, False, P)
         if r[0] * sw0 < 1e-9:
             break
         point = point + dn * r[0] * sw0 * 0.5
@@ -255,3 +255,159 @@ def test_positional_light_shadow(cpu_backend):
     g = gbuffer(cpu_backend, sc)
     hit = g[..., 0] >= 0
     assert hit.any() and (g[..., PL.G_SHADOW][hit] <= 1.0).all()
+
+
+def test_inside_rendering(cpu_backend):
+    sc = small_scene(32, 24)
+    sc.camera.mid = np.array([0.0, 0.0, 0.0])
+    sc.camera.z_start, sc.camera.z_end = -0.2, 3.0   # the start plane inside the bulb
+    sc.inside_mode = 1
+    g = gbuffer(cpu_backend, sc)
+    hit = g[..., 0] >= 0
+    assert hit.mean() > 0.5
+    sc.inside_mode = 2
+    g2 = gbuffer(cpu_backend, sc)
+    assert (g2[..., 0] >= 0).any()
+
+
+def test_interpolation_hybrid(cpu_backend):
+    sc = small_scene(32, 24)
+    sc.slots = [FormulaSlot("Integer Power", 1, {"power": 8}), FormulaSlot("Amazing Box", 1, {"scale": 2.0})]
+    sc.interpolation = (0.7, 0.3)
+    prog = Program.from_scene(sc)
+    assert prog.ipol and prog.de_mode == 0
+    g = gbuffer(cpu_backend, sc)
+    assert (g[..., 0] >= 0).any()
+    sc.interpolation = (1.0, 0.0)
+    only = gbuffer(cpu_backend, sc)
+    sc.interpolation = None
+    sc.slots = [FormulaSlot("Integer Power", 1, {"power": 8})]
+    sc.analytic_de = False
+    plain = gbuffer(cpu_backend, sc)
+    assert ((only[..., 0] >= 0) == (plain[..., 0] >= 0)).mean() > 0.95
+
+
+def test_smooth_normals_and_roughness(cpu_backend):
+    sc = small_scene(32, 24)
+    g0 = gbuffer(cpu_backend, sc)
+    sc.smooth_normals = 3
+    g = gbuffer(cpu_backend, sc)
+    hit = g[..., 0] >= 0
+    assert np.allclose(np.linalg.norm(g[..., 1:4][hit], axis=1), 1.0, atol=1e-4)
+    assert (g[..., PL.G_ROUGH][hit] >= 0).all() and (g[..., PL.G_ROUGH][hit] <= 1).all()
+    assert (g[..., PL.G_ROUGH][hit] > 0).any()
+    sc.smooth_normals = 8
+    g8 = gbuffer(cpu_backend, sc)
+    assert np.abs(g8[..., 1:4][hit] - g0[..., 1:4][hit]).mean() < 0.5
+
+
+def test_mc_sky_visibility(cpu_backend):
+    sc = small_scene(32, 24)
+    sc.ao.mode = "mc"
+    sc.ao.samples = 4
+    g = gbuffer(cpu_backend, sc)
+    hit = g[..., 0] >= 0
+    ao = g[..., PL.G_AO][hit]
+    assert (ao >= 0).all() and (ao <= 1).all() and ao.mean() < 1.0
+    from pymb3d.render import Renderer
+
+    sc.ao.passes = 2
+    res = Renderer(cpu_backend).render(sc)
+    assert res.gbuffer is not None and (res.gbuffer[..., PL.G_AO][hit] <= 1).all()
+
+
+def test_difs_mix_combination(cpu_backend):
+    from pymb3d.core.scene import DeCombination
+
+    sc = small_scene(32, 24)
+    sc.camera.zoom = 0.6
+    sc.slots = [FormulaSlot("Amazing Box", 2, {"scale": 2.0}), FormulaSlot("SphereIFS", 1, {"x_add": 0.0, "scale": 1.0})]
+    sc.decomb = DeCombination(kind=6, start2=1, repeat_from2=1, iterations2=2)
+    prog = Program.from_scene(sc)
+    assert prog.mix_kind and prog.parts[1].is_difs
+    g = gbuffer(cpu_backend, sc)
+    assert g.shape[0] == 24
+
+
+def test_post_processing_and_maps(cpu_backend, tmp_path):
+    from PIL import Image
+    from pymb3d.render import Renderer
+    from pymb3d.render.post import post_process, depth_of_field
+
+    sc = small_scene(48, 36)
+    res = Renderer(cpu_backend).render(sc)
+    base = res.image.copy()
+    # post settings change the picture but keep its shape and range
+    sc.post.contrast = 0.5
+    sc.post.saturation = -0.5
+    sc.post.sharpen = 0.5
+    img2 = relight(res.gbuffer, sc)
+    assert img2.shape == base.shape and not np.array_equal(img2, base)
+    sc.post.dof = True
+    sc.post.dof_focus = 0.0
+    sc.post.dof_aperture = 30.0
+    img3 = relight(res.gbuffer, sc)
+    assert img3.shape == base.shape
+    # a background picture, a light map and a diffuse map
+    grad = np.zeros((16, 32, 3), dtype=np.uint8)
+    grad[..., 0] = np.linspace(0, 255, 32)[None, :]
+    grad[..., 2] = 200
+    Image.fromarray(grad).save(tmp_path / "bg.png")
+    sc.post = type(sc.post)()
+    sc.lighting.bg_image = str(tmp_path / "bg.png")
+    sc.lighting.bg_brightness = 1.0
+    img4 = relight(res.gbuffer, sc)
+    bgpix = img4[res.gbuffer[..., 0] < 0]
+    assert bgpix.size and bgpix[:, 2].mean() > 100
+    sc.lighting.bg_direct = True
+    sc.lighting.bg_ambient = True
+    relight(res.gbuffer, sc)
+    sc.lighting.light_map = str(tmp_path / "bg.png")
+    sc.lighting.diffuse_map = str(tmp_path / "bg.png")
+    for mode in ("normals", "wrap", "iter_otrap"):
+        sc.lighting.diffuse_map_mode = mode
+        img5 = relight(res.gbuffer, sc)
+        assert img5.shape == base.shape
+    sc.lighting.diffuse_map_combine = True
+    relight(res.gbuffer, sc)
+
+
+def test_volumetric_light_and_glow(cpu_backend):
+    from pymb3d.render import Renderer
+
+    sc = small_scene(32, 24)
+    sc.lighting.vol_light = 1
+    sc.lighting.lights[0].visible = 2
+    g = gbuffer(cpu_backend, sc)
+    assert (g[..., PL.G_VOL] >= 0).all() and g[..., PL.G_VOL].max() > 0
+    res = Renderer(cpu_backend).render(sc)
+    assert res.image.shape == (24, 32, 3)
+
+
+def test_reflections(cpu_backend):
+    from pymb3d.render import Renderer
+
+    sc = small_scene(40, 30)
+    sc.camera.zoom = 0.8
+    sc.lighting.reflection = 0.8
+    sc.shadows = True
+    sc.ao.mode = "de"
+    g = gbuffer(cpu_backend, sc)
+    hit = g[..., 0] >= 0
+    r_hit = g[..., PL.G_R_DEPTH] >= 0
+    assert r_hit.any() and (r_hit & ~hit).sum() == 0
+    assert np.allclose(np.linalg.norm(g[..., PL.G_R_NX:PL.G_R_NZ + 1][r_hit], axis=1), 1.0, atol=1e-4)
+    res = Renderer(cpu_backend).render(sc)
+    sc2 = sc.copy()
+    sc2.lighting.reflection = 0.0
+    assert not np.array_equal(relight(res.gbuffer, sc2), res.image)
+
+
+def test_slice_2d(cpu_backend):
+    sc = small_scene(32, 24)
+    sc.camera.z_start = 0.0
+    sc.slice_2d = 1
+    g = gbuffer(cpu_backend, sc)
+    assert (g[..., 0] >= 0).all()
+    its = g[..., PL.G_ITER]
+    assert its.max() > its.min()

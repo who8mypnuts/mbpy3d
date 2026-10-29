@@ -15,6 +15,7 @@
 #define V3s(a) ((real3)((real)(a)))
 #define TO_INT(x) ((int)(x))
 #define TO_REAL(x) ((real)(x))
+#define TO_UINT(x) ((uint)(x))
 #define fractx(x) ((x) - floor(x))
 #define modx(x, y) ((x) - (y) * floor((x) / (y)))
 #define PI_ 3.14159265358979

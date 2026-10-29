@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pocl-binary-distribution"]
+mesh = ["scikit-image>=0.22"]
 
 [project.scripts]
 pymb3d = "pymb3d.__main__:main"

@@ -62,8 +62,11 @@ class Program:
     analytic_de: bool = True
     #: first slot of the second part of a DE combination, None = one part
     start2: int | None = None
+    #: interpolation hybrid of the first two slots (weights are parameters)
+    ipol: bool = False
     _c_cache: str | None = field(default=None, repr=False)
     _py_cache: str | None = field(default=None, repr=False)
+    _ipol_weights: tuple[float, float] = (1.0, 0.0)
 
     # ------------------------------------------------------------- factory
     @classmethod
@@ -76,14 +79,22 @@ class Program:
             slots.append(ProgramSlot(spec, spec.values(s.params), int(s.iterations)))
         if not slots:
             raise ValueError("no formula slot with iterations > 0")
+        ipol = scene.interpolation is not None
+        if ipol:
+            if len(slots) < 2:
+                raise ValueError("an interpolation hybrid needs two formulas")
+            slots = slots[:2]
+            for sl in slots:
+                sl.iterations = 1
         start2 = None
-        if scene.decomb.kind > 0:
+        if scene.decomb.kind > 0 and not ipol:
             # scene slot index -> program slot index (inactive slots dropped)
             active = [i for i, s in enumerate(scene.slots[: PL.MAX_SLOTS]) if s.active]
             start2 = sum(1 for i in active if i < scene.decomb.start2)
             if not (1 <= start2 < len(slots)):
-                raise ValueError("a DE combination needs active slots in both parts")
-        p = cls(slots, analytic_de=scene.analytic_de, start2=start2)
+                start2 = None  # a part without active slots: plain hybrid
+        p = cls(slots, analytic_de=scene.analytic_de, start2=start2, ipol=ipol)
+        p.mix_kind = start2 is not None and scene.decomb.kind == 6
         p.validate()
         return p
 
@@ -95,6 +106,10 @@ class Program:
                 raise ValueError("dIFS formulas cannot be mixed with other formulas in one hybrid part")
             if all(difs) and not any(s.de == "difs_shape" for s in specs):
                 raise ValueError("a dIFS hybrid needs a shape formula")
+            if self.ipol and any(difs):
+                raise ValueError("dIFS formulas do not work in an interpolation hybrid")
+        if self.mix_kind and not self.parts[1].is_difs:
+            raise ValueError("DE combination 'dIFS mix': the second hybrid part must be dIFS")
 
     # ---------------------------------------------------------------- keys
     @property
@@ -104,7 +119,7 @@ class Program:
     @property
     def key(self) -> str:
         """Identifies the generated code (formula names in order, the split)."""
-        txt = "|".join(self.formula_names) + f"#{self.start2}#{int(self.analytic_de)}"
+        txt = "|".join(self.formula_names) + f"#{self.start2}#{int(self.analytic_de)}#{int(self.ipol)}"
         return hashlib.sha1(txt.encode()).hexdigest()[:12]
 
     @property
@@ -125,12 +140,15 @@ class Program:
             return DE_DIFS
         if not self.analytic_de:
             return DE_NUMERIC
-        modes = {s.de for s in specs if s.counted}
+        modes = {s.de for s in specs if (s.counted or self.ipol)}
         if modes == {"linear"}:
             return DE_LINEAR
         if modes == {"log"}:
             return DE_LOG
         return DE_NUMERIC
+
+    #: DE combination kind 6 (dIFS mix) needs validation at program build
+    mix_kind: bool = False
 
     @property
     def de_mode(self) -> int:
@@ -175,8 +193,11 @@ class Program:
             p1 = ps[0]
             p2 = ps[1] if len(ps) > 1 else None
             # only the loops a part uses are generated; the others are stubs
-            parts.append(loopgen.c_iterate("iterate", self._loop_slots(p1), "P_REPEAT_FROM", self.four_d)
-                         if not p1.is_difs else loopgen.c_iterate_stub("iterate"))
+            if self.ipol:
+                parts.append(loopgen.c_ipol("iterate", self._loop_slots(p1), self.four_d))
+            else:
+                parts.append(loopgen.c_iterate("iterate", self._loop_slots(p1), "P_REPEAT_FROM", self.four_d)
+                             if not p1.is_difs else loopgen.c_iterate_stub("iterate"))
             parts.append(loopgen.c_difs("difs_orbit", self._loop_slots(p1), "P_REPEAT_FROM")
                          if p1.is_difs else loopgen.c_difs_stub("difs_orbit"))
             if p2 is None:
@@ -215,8 +236,11 @@ class Program:
             ps = self.parts
             p1 = ps[0]
             p2 = ps[1] if len(ps) > 1 else None
-            parts.append(loopgen.py_iterate("iterate", self._loop_slots(p1), "P_REPEAT_FROM", self.four_d)
-                         if not p1.is_difs else loopgen.py_iterate_stub("iterate"))
+            if self.ipol:
+                parts.append(loopgen.py_ipol("iterate", self._loop_slots(p1), self.four_d))
+            else:
+                parts.append(loopgen.py_iterate("iterate", self._loop_slots(p1), "P_REPEAT_FROM", self.four_d)
+                             if not p1.is_difs else loopgen.py_iterate_stub("iterate"))
             parts.append(loopgen.py_difs("difs_orbit", self._loop_slots(p1), "P_REPEAT_FROM")
                          if p1.is_difs else loopgen.py_difs_stub("difs_orbit"))
             if p2 is None:
@@ -268,11 +292,11 @@ class Program:
         analytic = part.de_mode != DE_NUMERIC
         n = x1 = y1 = i = 0.0
         cy1 = cz1 = 0.0
-        for idx in part.slots:
+        for k, idx in enumerate(part.slots):
             s = self.slots[idx]
-            if not s.counted:
+            if not s.counted and not self.ipol:
                 continue
-            cnt = float(s.iterations)
+            cnt = float(s.iterations) if not self.ipol else float(self._ipol_weights[k])
             scale_name = s.spec.scale_param
             scale = s.values.get(scale_name) if scale_name else None
             if analytic and scale is not None and s.spec.de == "linear":
@@ -299,7 +323,7 @@ class Program:
                         v = -1.1 - (v + 1.0) ** 2 * 2.5
                     cy1 += cnt * 0.5 / (math.log(-v) + 0.03)
                     cz1 += cnt
-        de_scale = x1 / n if n > 0 else 1.0
+        de_scale = (x1 if self.ipol else x1 / n) if n > 0 else 1.0
         col_plus = (abs(y1 / i) ** 0.25 * 40.0 - 49.0) if (n > 0 and i > 0) else 0.0
         col_plus += max_it * 0.1
         col_var = cy1 / cz1 if cz1 > 1e-3 else 0.6
@@ -338,11 +362,31 @@ class Program:
         P[PL.P_LN_RSTOP] = math.log(math.log(rstop))
         P[PL.P_DE_STOP] = max(0.001, scene.de_stop)
         zsd = min(1.0, max(0.0001, scene.z_step_div))
+        ms_de_sub = 0.0
+        if scene.step_sub_de_stop:
+            zsd = zsd * zsd + (1.2 * zsd) * (1.0 - zsd)
+            ms_de_sub = min(math.sqrt(zsd), 0.9)
         P[PL.P_Z_STEP_DIV] = zsd
         bin_search = max(0, scene.bin_search_steps)
         mh04zsd = cam.mh04zsd
         P[PL.P_FIRST_STEP_RANDOM] = 1.0 if scene.first_step_random else 0.0
         P[PL.P_DE_MODE] = p1.de_mode
+        if self.ipol:
+            w1, w2 = scene.interpolation or (1.0, 0.0)
+            tot = w1 + w2
+            w1, w2 = ((w1 / tot, w2 / tot) if tot > 1e-10 else (1.0, 0.0))
+            self._ipol_weights = (w1, w2)
+            P[PL.P_IPOL_W1], P[PL.P_IPOL_W2] = w1, w2
+        P[PL.P_INSIDE_MODE] = min(2, max(0, scene.inside_mode))
+        P[PL.P_SMOOTH_NORMALS] = min(8, max(0, scene.smooth_normals))
+        P[PL.P_MC_SAMPLES] = scene.ao.samples if scene.ao.mode == "mc" else 0
+        P[PL.P_MC_SEED] = 1.0
+        P[PL.P_MC_RANGE] = max(1.0, scene.ao.radius) * 8.0
+        vl = scene.lighting.vol_light
+        P[PL.P_VOL_LIGHT] = vl if (0 < vl <= PL.MAX_LIGHTS and scene.lighting.lights[vl - 1].enabled) else 0
+        P[PL.P_VOL_STEP] = 3
+        P[PL.P_REFLECT] = min(1.0, max(0.0, scene.lighting.reflection))
+        P[PL.P_SLICE_2D] = min(3, max(0, scene.slice_2d))
         de_scale, col_plus, col_var = self.de_heuristics(p1, max_it)
         P[PL.P_DE_SCALE] = de_scale
         P[PL.P_DE_OFFSET_PX] = min(P[PL.P_DE_STOP] * 0.1, 0.004)
@@ -370,8 +414,10 @@ class Program:
         if p2 is not None:
             its2 = max(1, scene.decomb.iterations2)
             its = max(max_it, its2)
-            P[PL.P_DECOMB_KIND] = min(5, max(1, scene.decomb.kind))
+            P[PL.P_DECOMB_KIND] = min(6, max(1, scene.decomb.kind))
             P[PL.P_DECOMB_SMOOTH] = max(1e-30, scene.decomb.smooth) / cam.step_width
+            P[PL.P_DECOMB_MIX_POW] = scene.decomb.mix_pow
+            P[PL.P_DECOMB_MIX_COL] = scene.decomb.mix_color
             P[PL.P_DE_MODE2] = p2.de_mode
             de_scale2, _, _ = self.de_heuristics(p2, its2)
             P[PL.P_DE_SCALE2] = de_scale2
@@ -392,7 +438,7 @@ class Program:
         P[PL.P_CUT_OPTIONS] = scene.cut_options & 7
         P[PL.P_CUT_POS:PL.P_CUT_POS + 3] = scene.cut_pos
         P[PL.P_ROT4D:PL.P_ROT4D + 16] = rot4d_matrix(*scene.rot_4d).reshape(-1)
-        P[PL.P_MS_DE_SUB] = 0.0
+        P[PL.P_MS_DE_SUB] = ms_de_sub
         for i, s in enumerate(self.slots):
             o = PL.P_SLOTS + i * PL.SLOT_STRIDE
             P[o] = s.iterations

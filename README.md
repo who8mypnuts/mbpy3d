@@ -140,13 +140,42 @@ combination compiles once per machine.
 * **dIFS** (MB3D's distance estimated IFS): `SphereIFS`, `boxIFS`,
   `cylinderIFS` shapes and the `transformIFS` transform, ported from the
   machine code of the `.m3f` files (option order kept, so `.m3p` files load).
-* **DE combinations** of two hybrid parts, MB3D's **2nd colour choice**
+* **DE combinations** of two hybrid parts (min, max, inverted max, two smooth
+  minima, the dIFS mix), **interpolation hybrids**, **inside / in-and-outside
+  rendering**, the **2D slice calculation**, MB3D's **2nd colour choice**
   (orbit trap modes), **positional lights**, 4D rotation, exact
-  `3SingleAngles` rotation matrices.
+  `3SingleAngles` rotation matrices, "step sub DE stop".
+* **Smooth normals** (1..8, MB3D's tangent sweeps / 5x5x5 cube) with the
+  measured **surface roughness** softening the lights through MB3D's cos
+  tables.
+* **Reflections**: a second marched layer (the mirrored ray's hit with its
+  own normal, colour, AO and shadows) shaded with the same lighting and
+  blended by the reflection amount and the specular colour.
+* **Monte Carlo sky visibility** as ambient occlusion (random hemisphere rays
+  from a hash RNG, passes averaged progressively in the final render),
+  **volumetric light** (lit path length along the view ray), **visible light
+  sources** (glow).
+* **Background pictures** (sphere or image mapped), **light maps** (ambient
+  from an image by the normal), **diffuse colour maps** (by normals, by
+  iterations + orbit trap, wrapped), with MB3D's map numbers resolved in the
+  `M3Maps` folder next to a parameter file.
+* **Depth of field** (layered blur by the distance from the focus plane,
+  Shift + double click sets the focus), **post processing** (brightness,
+  contrast, saturation, sharpen), **stereo pairs** (side by side, cross-eyed,
+  anaglyph), **16 bit PNG**.
+* **Navigator window** (MB3D's Navigator): a fast own preview with move /
+  turn / roll buttons, step and angle sizes, continuous flight, mouse and
+  keyboard navigation, live transfer of the camera to the main window.
+* **MutaGen**: a grid of random variations (formula options, lights,
+  palette) rendered as thumbnails; click one to adopt it.
+* **Batch rendering** (window and `pymb3d batch`), **voxel / mesh export**
+  (PNG slices, OBJ through marching cubes), palette tools (random, from an
+  image, reverse, spread), recent files, preview quality (DE stop multiplier).
 * **Animation** (`core/animation.py`, *Render > Animation*): keyframes taken
   from the scene; every numeric setting is a column of a polars DataFrame
-  interpolated per frame (linear or eased), the camera rotation by
-  quaternion slerp, the zoom logarithmically.  Frames render in a worker
+  interpolated per frame (linear, eased or a Catmull-Rom spline through the
+  keyframes), the camera rotation by quaternion slerp, the zoom
+  logarithmically.  Frames render in a worker
   thread to numbered PNGs, and to an MP4 when ffmpeg is installed.
 * **Export** to `.m3p` / MB3D text parameters (*File > Export*, *Edit > Copy
   parameters*), lighting presets (`.json`, MB3D `.m3l`), render data files
@@ -158,14 +187,15 @@ MB3D's internal formulas ported from `formulas.pas`: Integer Power (2..8),
 Real Power, Quaternion, Tricorn, Amazing Box, Bulbox, Folding Int Pow,
 Aexion C.  Custom formulas re-implemented from their `.m3f` machine code
 (names match, so `.m3p` files find them): Menger3, MengerIFS, Amazing Surf,
-ABoxMod1, ABoxModKali, SphereIFS, boxIFS, cylinderIFS, transformIFS,
-_Rotate; plus Mandelbulb IQ, ABox Mod, Sierpinski3, Octahedral KIFS and a
-Sphere Inversion transform.  The rest of MB3D's 460 `.m3f` formulas are x86
+ABoxMod1, ABoxModKali, genIFS, SphereIFS, boxIFS, cylinderIFS,
+transformIFS, _Rotate, _RotateC, _Translate, _PolyFold-sym,
+_SphereFolding1; plus Mandelbulb IQ, ABox Mod, Sierpinski3, Octahedral KIFS
+and a Sphere Inversion transform.  The rest of MB3D's 460 `.m3f` formulas are x86
 machine code and are ported one by one.
 
 ## Not yet ported (next steps)
 
-Interpolation hybrids, the dIFS "mix" combination, inside rendering, light
-maps, background pictures, depth of field, volumetric light, Monte Carlo
-rendering, smooth normals / roughness, more `.m3f` formulas, a wgpu/WebGPU
-backend, finishing single precision GPU hits in double on the CPU.
+Full Monte Carlo path tracing with transparency (the MC renderer here does
+sky visibility and mirror reflections), MB3D's exact volumetric light maps,
+hotkey configuration, the remaining `.m3f` formulas, a wgpu/WebGPU backend,
+finishing single precision GPU hits in double on the CPU.

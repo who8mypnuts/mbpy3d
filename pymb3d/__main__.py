@@ -1,6 +1,6 @@
 """``python -m pymb3d [scene.json | file.m3p]`` starts the application;
 ``python -m pymb3d render SCENE -o out.png [--width W --height H --backend cpu|opencl|opengl]``
-renders from the command line."""
+renders from the command line, ``python -m pymb3d batch FILES... -o DIR`` a list of files."""
 from __future__ import annotations
 
 import argparse
@@ -42,8 +42,35 @@ def render_cli(args: argparse.Namespace) -> int:
     return 0
 
 
+def batch_cli(args: argparse.Namespace) -> int:
+    from .backends.detect import available_devices, choose
+    from .gui.batch_dialog import render_files
+
+    devices = available_devices(probe_opengl=args.backend in (None, "opengl"))
+    if args.backend:
+        devices = [d for d in devices if d.backend == args.backend] or devices
+    choice = choose(devices, "final")
+    last = [-1]
+
+    def progress(k, n, f, m):
+        if k != last[0]:
+            print(f"[{k + 1}/{n}] {args.files[k]}", file=sys.stderr)
+            last[0] = k
+
+    done = render_files(args.files, args.output, choice, args.width, progress=progress)
+    print(f"{len(done)} pictures written to {args.output}", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "batch":
+        p = argparse.ArgumentParser(prog="pymb3d batch")
+        p.add_argument("files", nargs="+")
+        p.add_argument("-o", "--output", default="batch_out")
+        p.add_argument("--width", type=int, default=0)
+        p.add_argument("--backend", choices=["cpu", "opencl", "opengl"], default=None)
+        return batch_cli(p.parse_args(argv[1:]))
     if argv and argv[0] == "render":
         p = argparse.ArgumentParser(prog="pymb3d render")
         p.add_argument("scene")

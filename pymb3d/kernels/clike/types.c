@@ -34,12 +34,19 @@ STRUCT_BEGIN(Ray)
     real3 dir;
 STRUCT_END(Ray)
 
+STRUCT_BEGIN(NormalResult)
+    real3 n;
+    real rough;
+STRUCT_END(NormalResult)
+
 STRUCT_BEGIN(Hit)
     bool hit;
     bool at_start;
     real t;
     real3 pos;
     real steps;
+    real vol;
+    bool invert;
     DeResult r;
 STRUCT_END(Hit)
 
@@ -52,5 +59,13 @@ STRUCT_BEGIN(Pixel)
     real ao;
     real shadow[MAX_LIGHTS];
     real iter;
-    real de;
+    real rough;
+    real vol;
+    real r_depth;
+    real3 r_normal;
+    real r_color;
+    real r_otrap;
+    real r_ao;
+    real r_shadow[MAX_LIGHTS];
+    real r_steps;
 STRUCT_END(Pixel)

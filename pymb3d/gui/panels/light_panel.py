@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QTabWidget,
     QVBoxLayout,
@@ -51,6 +52,9 @@ class LightEditor(QWidget):
             self.diff.addItem(name)
         self.relative = QCheckBox("relative to the object (world space)")
         self.shadows = QCheckBox("casts shadows")
+        self.visible = QComboBox()
+        for name in ("invisible", "large glow", "medium glow", "small glow"):
+            self.visible.addItem(name)
         self.positional = QCheckBox("positional light at")
         self.position = [DoubleSpin(0.0, -1e9, 1e9, 4, 0.1) for _ in range(3)]
         prow = QHBoxLayout()
@@ -71,7 +75,9 @@ class LightEditor(QWidget):
         form.addRow("diffuse function", self.diff)
         form.addRow(self.relative)
         form.addRow(self.shadows)
+        form.addRow("visible light source", self.visible)
         form.addRow(prow)
+        self.visible.currentIndexChanged.connect(lambda i: self._set("visible", int(i)))
         self.positional.toggled.connect(lambda v: self._set("positional", bool(v), "render"))
         for sp in self.position:
             sp.valueChanged.connect(self._position_changed)
@@ -102,6 +108,7 @@ class LightEditor(QWidget):
         self.relative.setChecked(li.relative_to_object)
         self.shadows.setChecked(li.shadows)
         self.positional.setChecked(li.positional)
+        self.visible.setCurrentIndex(min(3, max(0, li.visible)))
         for sp, v in zip(self.position, li.position):
             sp.set_silently(float(v))
         self._loading = False
@@ -138,6 +145,9 @@ class GlobalLightEditor(QWidget):
         ("fog offset", "fog_offset", 0, 255, "128 = 0"),
         ("dynamic fog", "dyn_fog", 0, 160, "53 = off"),
         ("gamma", "gamma", 0, 63, "32 = neutral"),
+        ("volumetric light (0 = off, 1..6 = light)", "vol_light", 0, 6, "needs a new march"),
+        ("volumetric strength", "vol_light_strength", 0, 10, ""),
+        ("reflections (0 = off)", "reflection", 0, 1, "needs a new march; amount of the mirrored picture"),
     ]
     COLORS = [
         ("ambient top", "ambient_top"), ("ambient bottom", "ambient_bottom"),
@@ -156,7 +166,7 @@ class GlobalLightEditor(QWidget):
         form = QFormLayout(self)
         self.sliders: dict[str, SliderSpin] = {}
         for label, attr, lo, hi, tip in self.SLIDERS:
-            s = SliderSpin(0.0, lo, hi, 0, 1.0)
+            s = SliderSpin(0.0, lo, hi, 2 if attr == "reflection" else 0, 0.05 if attr == "reflection" else 1.0)
             s.setToolTip(tip)
             s.valueChanged.connect(lambda v, a=attr: self._set(a, float(v)))
             form.addRow(label, s)
@@ -191,8 +201,12 @@ class GlobalLightEditor(QWidget):
     def _set(self, attr: str, value) -> None:
         if self._loading:
             return
+        if attr == "vol_light":
+            value = int(value)
+        old = getattr(self.model.scene.lighting, attr)
         setattr(self.model.scene.lighting, attr, value)
-        self.model.touch("lighting")
+        needs_march = attr == "vol_light" or (attr == "reflection" and ((old > 0) != (value > 0)))
+        self.model.touch("render" if needs_march else "lighting")
 
 
 class PaletteEditor(QWidget):
@@ -225,7 +239,50 @@ class PaletteEditor(QWidget):
             grid.addWidget(spe, i + 1, 3)
             self.rows.append((pos, dif, spe))
         lay.addLayout(grid)
+        tools = QHBoxLayout()
+        for text, fn in (("Random", self._random), ("From image...", self._from_image), ("Reverse", self._reverse),
+                         ("Spread evenly", self._spread)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            tools.addWidget(b)
+        lay.addLayout(tools)
         lay.addStretch(1)
+
+    def _apply_stops(self, stops) -> None:
+        self.model.snapshot()
+        pal = self.model.scene.lighting.palette
+        for st, (pos, rgb) in zip(pal, stops):
+            st.position = int(pos)
+            st.diffuse = tuple(float(v) for v in rgb)
+        self.load()
+        self.model.touch("lighting")
+
+    def _random(self) -> None:
+        from ...core.mutagen import random_palette
+
+        self._apply_stops(random_palette())
+
+    def _from_image(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        from ...render.maps import load_map
+
+        path, _ = QFileDialog.getOpenFileName(self, "Gradient image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+        if not path:
+            return
+        img = load_map(path)
+        h, w = img.shape[:2]
+        row = img[h // 2]
+        stops = [(int(i * 32767 / 9), tuple(row[min(w - 1, int(i * (w - 1) / 9))])) for i in range(10)]
+        self._apply_stops(stops)
+
+    def _reverse(self) -> None:
+        pal = self.model.scene.lighting.palette
+        cols = [st.diffuse for st in pal][::-1]
+        self._apply_stops([(st.position, c) for st, c in zip(pal, cols)])
+
+    def _spread(self) -> None:
+        pal = self.model.scene.lighting.palette
+        self._apply_stops([(int(i * 32767 / 9), st.diffuse) for i, st in enumerate(pal)])
 
     def load(self) -> None:
         self._loading = True

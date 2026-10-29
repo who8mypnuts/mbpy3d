@@ -6,3 +6,4 @@ pillow>=10
 moderngl>=5.8
 pyopencl>=2024.1
 pytest>=8
+scikit-image>=0.22  # optional: OBJ mesh export

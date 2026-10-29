@@ -84,6 +84,7 @@ class AnimationDialog(QDialog):
         self.easing = QComboBox()
         self.easing.addItem("linear", "linear")
         self.easing.addItem("ease in / out", "ease")
+        self.easing.addItem("spline through the keyframes", "spline")
         self.scrub = QSlider(Qt.Orientation.Horizontal)
         self.scrub.setRange(0, 0)
         self.scrub_label = QLabel("frame 0 / 0")

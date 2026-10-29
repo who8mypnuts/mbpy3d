@@ -16,6 +16,7 @@ from ..backends.base import Backend, RenderCancelled
 from ..core import params as PL
 from ..core.scene import Scene
 from ..kernels.program import Program
+from .post import post_process
 from .shading import ShadeOptions, shade, to_uint8
 from .ssao import apply_ssao
 
@@ -55,12 +56,13 @@ class RenderOptions:
 
 
 def relight(gbuf: np.ndarray, scene: Scene) -> np.ndarray:
-    """Shade a kept G-buffer again with the scene's current lighting."""
+    """Shade a kept G-buffer again with the scene's current lighting and
+    post processing."""
     g = gbuf
     if scene.ao.mode == "ssao":
         g = gbuf.copy()
         apply_ssao(g, scene.ao.radius, scene.ao.strength)
-    return to_uint8(shade(g, scene))
+    return to_uint8(post_process(shade(g, scene), g, scene))
 
 
 class Renderer:
@@ -92,7 +94,7 @@ class Renderer:
                 apply_ssao(gbuf, scene.ao.radius, scene.ao.strength)
             if progress:
                 progress(0.98, "shading ...")
-            image = to_uint8(shade(gbuf, scene))
+            image = to_uint8(post_process(shade(gbuf, scene), gbuf, scene))
             kept = gbuf
         else:
             image, kept = self._march_strips(program, scene, progress, band, abort)
@@ -106,7 +108,7 @@ class Renderer:
     def _march_full(self, program: Program, scene: Scene, progress, band, abort) -> np.ndarray:
         W, H = scene.width, scene.height
         P = program.pack(scene, dtype=self.backend.dtype)
-        opts = ShadeOptions(use_ao=scene.ao.mode == "de", full_size=(W, H))
+        opts = ShadeOptions(use_ao=scene.ao.mode in ("de", "mc"), full_size=(W, H))
         out = np.zeros((H, W, PL.N_CHANNELS), dtype=np.float32)
         done_rows = np.zeros(H, dtype=bool)
         state = {"flushed": 0, "last": time.perf_counter()}
@@ -135,6 +137,28 @@ class Renderer:
 
         g = self.backend.render(program, P, W, H, progress=on_band, abort=abort, out=out)
         flush(force=True)
+        passes = max(1, scene.ao.passes) if scene.ao.mode == "mc" else 1
+        if passes > 1:
+            # Monte Carlo: further passes with other seeds, the sky visibility averaged
+            acc = g[..., PL.G_AO].astype(np.float64)
+            for k in range(1, passes):
+                if abort.is_set():
+                    raise RenderCancelled()
+                Pk = P.copy()
+                Pk[PL.P_MC_SEED] = k + 1
+                done_rows[:] = False
+                state["flushed"] = 0
+
+                def on_band_k(y0, rows, done, total, _k=k):
+                    if progress:
+                        progress(0.02 + 0.95 * (_k + done / max(1, total)) / passes, f"Monte Carlo pass {_k + 1}/{passes}")
+
+                gk = self.backend.render(program, Pk, W, H, progress=on_band_k, abort=abort)
+                acc += gk[..., PL.G_AO]
+                g[..., PL.G_AO] = acc / (k + 1)
+                if band and self.options.live_bands:
+                    opts.origin = (0, 0)
+                    band(0, to_uint8(shade(g, scene, opts)))
         return g
 
     def _march_strips(self, program: Program, scene: Scene, progress, band, abort):
@@ -158,7 +182,7 @@ class Renderer:
             if scene.ao.mode == "ssao":
                 apply_ssao(g, scene.ao.radius, scene.ao.strength)
             opts = ShadeOptions(use_ao=scene.ao.mode != "none", full_size=(W, H), origin=(0, ya))
-            rgb = to_uint8(shade(g, scene, opts))
+            rgb = to_uint8(post_process(shade(g, scene, opts), g, scene, (W, H)))
             image[y:y1] = rgb[y - ya:y1 - ya]
             if band:
                 band(y, image[y:y1].copy())

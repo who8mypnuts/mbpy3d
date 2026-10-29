@@ -7,6 +7,7 @@
 #define V3s(a) vec3(a)
 #define TO_INT(x) int(x)
 #define TO_REAL(x) float(x)
+#define TO_UINT(x) uint(x)
 #define fabs abs
 #define fmin min
 #define fmax max

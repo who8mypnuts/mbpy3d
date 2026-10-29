@@ -39,6 +39,8 @@ class Light:
     shadows: bool = True
     positional: bool = False
     position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    #: visible light source: a glow where the view looks into the light (0 = off, 1..3 sizes)
+    visible: int = 0
 
     def direction_view(self) -> tuple[float, float, float]:
         """Unit vector *towards* the light in view space (`BuildViewVectorFOV`
@@ -136,6 +138,31 @@ class Lighting:
     no_color_interpolation: bool = False
     #: `VarColZpos`: colour shift with depth
     var_col_z: float = 0.0
+    #: `RoughnessFactor` 0..255: how much the surface roughness softens the lights
+    roughness: float = 0.0
+    #: background picture (file name; searched next to the scene / in M3Maps)
+    bg_image: str = ""
+    #: background in image coordinates instead of a sphere around the viewer
+    bg_direct: bool = False
+    bg_rotation: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    bg_brightness: float = 1.0
+    #: a blurred copy of the background is the ambient light
+    bg_ambient: bool = False
+    #: light map: an image lighting the object from all directions
+    light_map: str = ""
+    light_map_intensity: float = 1.0
+    light_map_rotation: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    #: diffuse colour map and its mapping: "normals", "iter_otrap" or "wrap"
+    diffuse_map: str = ""
+    diffuse_map_mode: str = "normals"
+    diffuse_map_scale: float = 1.0
+    #: combine the map's brightness with the palette colour
+    diffuse_map_combine: bool = False
+    #: volumetric light: the light (1..6) whose rays are scattered along the view, 0 = off
+    vol_light: int = 0
+    vol_light_strength: float = 1.0
+    #: reflections: amount 0..1 of the mirrored picture on the surface (0 = off)
+    reflection: float = 0.0
 
     def to_dict(self) -> dict:
         d = asdict(self)

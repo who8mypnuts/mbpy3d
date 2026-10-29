@@ -25,6 +25,8 @@ class PreviewController(QObject):
         super().__init__()
         self.preview_width = preview_width
         self.coarse_factor = coarse_factor
+        #: DE stop multiplier of the preview (> 1: coarser and faster)
+        self.de_stop_mul = 1.0
         self._service = RenderService(choice, RenderOptions(live_bands=False), "preview")
         self._service.finished.connect(self._on_finished)
         self._service.failed.connect(self._on_failed)
@@ -90,6 +92,7 @@ class PreviewController(QObject):
     def _sized(self, scene: Scene, factor: int = 1) -> Scene:
         w, h = self.preview_size(scene)
         sc = scene.resized(max(8, w // factor), max(8, h // factor))
+        sc.de_stop = scene.de_stop * self.de_stop_mul
         if factor > 1:
             # the coarse pass while interacting: no shadows, no occlusion
             sc.shadows = False

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import struct
+from pathlib import Path
 
 import numpy as np
 
@@ -38,7 +39,7 @@ def write(scene: Scene) -> bytes:
     put(4, "<i", sc.width)
     put(8, "<i", sc.height)
     put(12, "<i", sc.iterations)
-    put(16, "<H", int(sc.first_step_random))
+    put(16, "<H", int(sc.first_step_random) | (int(sc.step_sub_de_stop) << 2) | (max(0, min(8, sc.smooth_normals)) << 6))
     put(20, "<d", cam.z_start)
     put(28, "<d", cam.z_end)
     for k in range(3):
@@ -47,7 +48,7 @@ def write(scene: Scene) -> bytes:
     put(84, "<d", cam.zoom)
     rstop = sc.rstop if sc.rstop else max([registry.lookup(s.name).rstop for s in sc.active_slots] + [16.0])
     put(92, "<d", rstop)
-    put(104, "<f", 2.0)
+    put(104, "<f", sc.decomb.mix_pow)
     put(108, "<d", cam.fov_y)
     put(116, "<f", 1.5)
     put(120, "<f", 1.0)
@@ -67,6 +68,12 @@ def write(scene: Scene) -> bytes:
     put(224, "<H", to_short_float(1.0))
     put(226, "<f", 1.0)
     d[162] = int(sc.vary_de_stop_on_fov)
+    if sc.post.dof:
+        put(164, "<f", sc.post.dof_focus)
+        put(168, "<f", 25.0)
+        put(172, "<f", max(0.0001, min(2.0, sc.post.dof_aperture / 100.0)))
+        d[181] = 1 | (int(sc.post.dof_forward_only) << 3)
+        put(410, "<f", sc.post.dof_focus)
     d[176] = sc.cut_options & 7
     for k in range(3):
         put(346 + 8 * k, "<d", float(sc.cut_pos[k]))
@@ -88,17 +95,19 @@ def write(scene: Scene) -> bytes:
     put(338, "<f", sc.color_mul)
     d[342] = max(0, min(5, sc.color_option))
     d[343] = 2 << 4
-    d[344] = 1
-    d[345] = 2
+    d[344] = 0 if sc.slice_2d else 1
+    d[345] = sc.slice_2d if sc.slice_2d else 2
     put(378, "<f", sc.decomb.smooth if sc.decomb.kind else 0.5)
     put(418, "<i", sc.decomb.iterations2 if sc.decomb.kind else sc.iterations)
+    d[422] = sc.decomb.mix_color
     d[423] = 128
 
     # ---- TLightingParas9
     l = sc.lighting
     b = 432
     put(b, "<h", int(round(l.var_col_z)))
-    d[b + 2] = 255
+    d[b + 2] = int(max(0, min(255, round(l.roughness))))
+    d[b + 7] = (int(l.bg_ambient) << 5) | (int(l.diffuse_map_combine) << 2)
     d[b + 4:b + 7] = _rgb(l.dyn_fog_color)
     tbv = [
         (int(round(l.fog_offset)) & 0xFFFF) | (128 << 16),
@@ -116,7 +125,10 @@ def write(scene: Scene) -> bytes:
     tbo = (60 & 0x7F) | ((60 & 0x7F) << 7) | (7 << 20)
     tbo |= int(l.color_cycling) << 14 | int(l.color_on_otrap) << 17 | int(l.far_fog) << 18
     tbo |= (int(round(l.gamma)) & 0x3F) << 23
+    tbo |= int(l.bg_direct) << 15
     put(b + 44, "<I", tbo)
+    for k, off in zip(l.bg_rotation, (b + 50, b + 51, b + 67)):
+        d[off] = int(round(k / 360.0 * 256.0 + 128)) & 0xFF
     d[b + 52:b + 55] = _rgb(l.ambient_top)
     d[b + 56:b + 59] = _rgb(l.ambient_bottom)
     d[b + 60:b + 63] = _rgb(l.depth_color_top)
@@ -143,7 +155,15 @@ def write(scene: Scene) -> bytes:
     d[light(2) + 16] = 30
     d[light(3) + 24] = int(l.no_color_interpolation)
     d[light(3) + 16] = 0
-    d[light(4) + 16] = 40
+    d[light(4) + 16] = int(max(0, min(255, round(40 + math.log(max(1e-6, l.bg_brightness)) / math.log(1.04)))))
+    if l.bg_image and l.bg_image.isprintable():
+        name = Path(l.bg_image).name.encode("latin-1", "replace")[:23]
+        d[b + 384:b + 384 + len(name)] = name
+    if l.diffuse_map.isdigit():
+        n = int(l.diffuse_map)
+        d[b + 3] = n & 0xFF
+        d[light(1) + 16] = (n >> 8) & 0xFF
+        d[light(1) + 24] = {"iter_otrap": 0, "normals": 1, "wrap": 2}.get(l.diffuse_map_mode, 1)
     for i, c in enumerate(l.palette[:10]):
         o = b + 260 + i * 10
         put(o, "<H", max(0, min(32767, c.position)))
@@ -162,7 +182,11 @@ def write(scene: Scene) -> bytes:
     d[a] = 16
     slots = sc.slots[:6]
     last = max([i for i, s in enumerate(slots) if s.active] + [0])
-    if sc.decomb.kind:
+    if sc.interpolation is not None:
+        d[a + 1] = 1
+        d[a + 5] = 1
+        put(a + 6, "<H", 0x151)
+    elif sc.decomb.kind:
         d[a + 1] = 2
         d[a + 3] = max(1, min(6, sc.decomb.kind)) - 1
         end1 = max(0, sc.decomb.start2 - 1)
@@ -171,8 +195,8 @@ def write(scene: Scene) -> bytes:
     else:
         d[a + 5] = (last & 7) | ((min(sc.repeat_from, last) & 7) << 4)
         put(a + 6, "<H", 0x151)
-    d[a + 2] = int(not sc.analytic_de)
-    d[a + 4] = last + 1
+    d[a + 2] = int(not sc.analytic_de) | {0: 0, 1: 2, 2: 4}.get(sc.inside_mode, 0)
+    d[a + 4] = 2 if sc.interpolation is not None else last + 1
     for i, s in enumerate(slots):
         o = a + 8 + i * SLOT_SIZE
         if not s.active:
@@ -182,6 +206,8 @@ def write(scene: Scene) -> bytes:
         vals = spec.values(s.params)
         opts = [(p.name, vals[p.name], 2 if p.kind in ("int", "bool") else 0) for p in spec.editable_params][:16]
         put(o, "<i", s.iterations)
+        if sc.interpolation is not None and i < 2:
+            put(o, "<f", float(sc.interpolation[i]))
         put(o + 4, "<i", fnr)
         put(o + 8, "<i", len(opts))
         name = spec.name.encode("latin-1", "replace")[:31]

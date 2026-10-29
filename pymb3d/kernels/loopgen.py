@@ -201,3 +201,81 @@ def py_difs_stub(name: str) -> str:
                       f"    {PY_STATE} = orbit_init(px, py, pz, P)",
                       "    min_de = 65535.0", "    it_min = 0", "    dfree2 = 0.0", "    slot = 0",
                       "    return " + PY_DIFS_RET])
+
+
+def c_ipol(name: str, slots: list[LoopSlot], four_d: bool) -> str:
+    """The interpolation hybrid (doInterpolHybridPas): both formulas are
+    applied to the same point every iteration and blended by the weights,
+    the length of the result blended as well."""
+    a, b = slots[0].index, slots[1].index
+    w2 = " + a.w * a.w" if four_d else ""
+    w2b = " + b.w * b.w" if four_d else ""
+    w2o = " + o.s.w * o.s.w" if four_d else ""
+    return "\n".join([
+        f"Orbit {name}(FN_ARGS real3 pos, int max_it, real rstop2) {{",
+        "    Orbit o = orbit_init(FN_PASS pos);",
+        "    real s1 = PARAM(P_IPOL_W1);",
+        "    real s2 = PARAM(P_IPOL_W2);",
+        "    State a;",
+        "    State b;",
+        "    real xx;",
+        "    real yy;",
+        "    int guard;",
+        "    for (guard = 0; guard < 100000; guard += 1) {",
+        "        o.rold = o.s.r2;",
+        f"        a = formula_{a}(FN_PASS o.s);",
+        f"        b = formula_{b}(FN_PASS o.s);",
+        f"        xx = sqrt(dot(a.z, a.z){w2}) * s1 + sqrt(dot(b.z, b.z){w2b}) * s2;",
+        "        o.s.z = a.z * s1 + b.z * s2;",
+        "        o.s.w = a.w * s1 + b.w * s2;",
+        "        o.s.dr = fabs(a.dr) * s1 + fabs(b.dr) * s2;",
+        "        o.s.c = a.c;",
+        "        o.s.cw = a.cw;",
+        "        o.s.vary = a.vary;",
+        f"        yy = xx / sqrt(dot(o.s.z, o.s.z){w2o} + TINY);",
+        "        o.s.z = o.s.z * yy;",
+        "        o.s.w = o.s.w * yy;",
+        "        o.slot = 1;",
+        "        o.it += 1;",
+        f"        o.s.r2 = dot(o.s.z, o.s.z){w2o};",
+        "        if (o.s.r2 < o.otrap) o.otrap = o.s.r2;",
+        "        if (o.it >= max_it || o.s.r2 > rstop2 || isnan(o.s.r2)) return o;",
+        "    }",
+        "    return o;",
+        "}",
+    ])
+
+
+def py_ipol(name: str, slots: list[LoopSlot], four_d: bool) -> str:
+    a, b = slots[0].index, slots[1].index
+    A = "a_zx, a_zy, a_zz, a_w, a_cx, a_cy, a_cz, a_dr, a_de, a_trap, a_vary"
+    B = "b_zx, b_zy, b_zz, b_w, b_cx, b_cy, b_cz, b_dr, b_de, b_trap, b_vary"
+    wa = " + a_w * a_w" if four_d else ""
+    wb = " + b_w * b_w" if four_d else ""
+    wo = " + s_w * s_w" if four_d else ""
+    return "\n".join([
+        DECO, f"def {name}(px, py, pz, max_it, rstop2, P):",
+        f"    {PY_STATE} = orbit_init(px, py, pz, P)",
+        "    rold = s_r2", "    otrap = s_r2", "    it = 0", "    slot = 1",
+        "    s1 = P[P_IPOL_W1]", "    s2 = P[P_IPOL_W2]",
+        "    for guard in range(100000):",
+        "        rold = s_r2",
+        f"        {A} = formula_{a}({PY_STATE}, P)",
+        f"        {B} = formula_{b}({PY_STATE}, P)",
+        f"        xx = math.sqrt(a_zx * a_zx + a_zy * a_zy + a_zz * a_zz{wa}) * s1 + math.sqrt(b_zx * b_zx + b_zy * b_zy + b_zz * b_zz{wb}) * s2",
+        "        s_zx = a_zx * s1 + b_zx * s2",
+        "        s_zy = a_zy * s1 + b_zy * s2",
+        "        s_zz = a_zz * s1 + b_zz * s2",
+        "        s_w = a_w * s1 + b_w * s2",
+        "        s_dr = abs(a_dr) * s1 + abs(b_dr) * s2",
+        "        s_cx, s_cy, s_cz, s_vary = a_cx, a_cy, a_cz, a_vary",
+        f"        yy = xx / math.sqrt(s_zx * s_zx + s_zy * s_zy + s_zz * s_zz{wo} + 1e-40)",
+        "        s_zx, s_zy, s_zz, s_w = s_zx * yy, s_zy * yy, s_zz * yy, s_w * yy",
+        "        it += 1",
+        f"        s_r2 = s_zx * s_zx + s_zy * s_zy + s_zz * s_zz{wo}",
+        "        if s_r2 < otrap:",
+        "            otrap = s_r2",
+        "        if it >= max_it or s_r2 > rstop2 or math.isnan(s_r2):",
+        "            return " + PY_ITER_RET,
+        "    return " + PY_ITER_RET,
+    ])

@@ -112,7 +112,7 @@ class OpenGLBackend(Backend):
                 self._fbo.release()
                 for t in self._textures:
                     t.release()
-            self._textures = [self.ctx.texture((width, rows), 4, dtype="f4") for _ in range(4)]
+            self._textures = [self.ctx.texture((width, rows), 4, dtype="f4") for _ in range(8)]
             self._fbo = self.ctx.framebuffer(color_attachments=self._textures)
             self._fbo_size = (width, rows)
         return self._fbo
@@ -130,7 +130,7 @@ class OpenGLBackend(Backend):
         _write_params(compiled.program, Pb)
         compiled.vao.render(mode=4, vertices=3)  # TRIANGLES
         self.ctx.finish()
-        for k in range(4):
+        for k in range(8):
             raw = fbo.read(components=4, attachment=k, dtype="f4")
             arr = np.frombuffer(raw, dtype=np.float32).reshape(rows, width, 4)
             out[y0:y0 + rows, :, 4 * k:4 * k + 4] = arr

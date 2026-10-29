@@ -172,6 +172,13 @@ class FormulaPanel(QWidget):
         form.addRow(self.analytic)
         form.addRow(self.julia)
         form.addRow("Julia seed x y z w", jl)
+        self.ipol = QCheckBox("interpolation hybrid: blend slots 1 and 2 every iteration with the weights")
+        self.ipol_w = [DoubleSpin(0.5, 0.0, 1e6, 3, 0.05) for _ in range(2)]
+        il = QHBoxLayout()
+        il.addWidget(self.ipol)
+        for sp in self.ipol_w:
+            il.addWidget(sp)
+        form.addRow(il)
         lay.addWidget(general)
 
         dc = QGroupBox("DE combination (two hybrid parts)")
@@ -184,11 +191,17 @@ class FormulaPanel(QWidget):
         self.dc_repeat2 = IntSpin(1, 1, MAX_SLOTS - 1)
         self.dc_iterations2 = IntSpin(12, 1, 100000)
         self.dc_smooth = DoubleSpin(0.5, 0.0, 1e6, 4, 0.05)
+        self.dc_mix_pow = DoubleSpin(2.0, 0.0, 1e6, 3, 0.1)
+        self.dc_mix_col = QComboBox()
+        for name in ("both parts", "part 1", "part 2"):
+            self.dc_mix_col.addItem(name)
         df.addRow("combination", self.dc_kind)
         df.addRow("second part starts at slot", self.dc_start2)
         df.addRow("second part repeats from slot", self.dc_repeat2)
         df.addRow("second part iterations", self.dc_iterations2)
         df.addRow("smoothing distance", self.dc_smooth)
+        df.addRow("dIFS mix power", self.dc_mix_pow)
+        df.addRow("dIFS mix colours", self.dc_mix_col)
         lay.addWidget(dc)
 
         col = QGroupBox("2nd colour choice (orbit trap)")
@@ -219,9 +232,13 @@ class FormulaPanel(QWidget):
         self.julia.toggled.connect(lambda v: self._set("julia", bool(v)))
         for sp in self.julia_c:
             sp.valueChanged.connect(self._julia_changed)
+        self.ipol.toggled.connect(self._ipol_changed)
+        for sp in self.ipol_w:
+            sp.valueChanged.connect(self._ipol_changed)
         self.dc_kind.currentIndexChanged.connect(self._decomb_changed)
-        for w in (self.dc_start2, self.dc_repeat2, self.dc_iterations2, self.dc_smooth):
+        for w in (self.dc_start2, self.dc_repeat2, self.dc_iterations2, self.dc_smooth, self.dc_mix_pow):
             w.valueChanged.connect(self._decomb_changed)
+        self.dc_mix_col.currentIndexChanged.connect(self._decomb_changed)
         self.color_option.currentIndexChanged.connect(lambda i: self._set("color_option", int(i)))
         self.color_mul.valueChanged.connect(lambda v: self._set("color_mul", float(v)))
         model.replaced.connect(self.load)
@@ -238,17 +255,30 @@ class FormulaPanel(QWidget):
         self.julia.setChecked(sc.julia)
         for sp, v in zip(self.julia_c, sc.julia_c):
             sp.set_silently(v)
+        self.ipol.setChecked(sc.interpolation is not None)
+        if sc.interpolation is not None:
+            for sp, v in zip(self.ipol_w, sc.interpolation):
+                sp.set_silently(v)
         d = sc.decomb
         self.dc_kind.setCurrentIndex(min(max(d.kind, 0), len(DeCombination.KINDS) - 1))
         self.dc_start2.set_silently(d.start2 + 1)
         self.dc_repeat2.set_silently(d.repeat_from2 + 1)
         self.dc_iterations2.set_silently(d.iterations2)
         self.dc_smooth.set_silently(d.smooth)
+        self.dc_mix_pow.set_silently(d.mix_pow)
+        self.dc_mix_col.setCurrentIndex(min(2, max(0, d.mix_color)))
         self.color_option.setCurrentIndex(min(5, max(0, sc.color_option)))
         self.color_mul.set_silently(sc.color_mul)
         for e in self.editors:
             e.load()
         self._loading = False
+
+    def _ipol_changed(self, _v=None) -> None:
+        if self._loading:
+            return
+        self.model.snapshot()
+        self.model.scene.interpolation = (self.ipol_w[0].value(), self.ipol_w[1].value()) if self.ipol.isChecked() else None
+        self.model.touch("formulas")
 
     def _decomb_changed(self, _v=None) -> None:
         if self._loading:
@@ -260,6 +290,8 @@ class FormulaPanel(QWidget):
         d.repeat_from2 = int(self.dc_repeat2.value()) - 1
         d.iterations2 = int(self.dc_iterations2.value())
         d.smooth = float(self.dc_smooth.value())
+        d.mix_pow = float(self.dc_mix_pow.value())
+        d.mix_color = int(self.dc_mix_col.currentIndex())
         self.model.touch("formulas")
 
     def _set(self, attr: str, value) -> None:

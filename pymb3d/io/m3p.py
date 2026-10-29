@@ -294,6 +294,16 @@ def _parse_light(r: _Rd, w: list[str]) -> Lighting:
     l.far_fog = bool(tb_options & 0x40000)
     l.gamma = float((tb_options >> 23) & 0x3F)
     l.no_color_interpolation = bool(r.u8(b + 68 + 3 * 32 + 24) & 1)
+    l.roughness = float(r.u8(b + 2))
+    add_opt = r.u8(b + 7)
+    l.bg_ambient = bool(add_opt & 32)
+    diff_map = r.u8(b + 3) | (r.u8(b + 68 + 32 + 16) << 8)
+    if diff_map > 0:
+        l.diffuse_map = str(diff_map)
+        l.diffuse_map_mode = ("iter_otrap", "normals", "wrap", "wrap")[r.u8(b + 68 + 32 + 24) & 3]
+        sc_byte = r.u8(b + 68 + 2 * 32 + 16)
+        l.diffuse_map_scale = (1.2 if (r.u8(b + 68 + 32 + 24) & 3) else 1.05) ** (sc_byte - 30)
+        l.diffuse_map_combine = bool(add_opt & 4)
     l.ambient_top = r.rgb(b + 52)
     l.ambient_bottom = r.rgb(b + 56)
     l.depth_color_top = r.rgb(b + 60)
@@ -319,9 +329,12 @@ def _parse_light(r: _Rd, w: list[str]) -> Lighting:
             shadows=not ((lopt >> 6) & 1),
         )
         if (lopt & 3) == 2:
-            w.append(f"light {i + 1}: light maps are not supported, the light is used as a plain light")
-        if li.positional:
-            w.append(f"light {i + 1}: positional lights are treated as directional")
+            # a light map instead of a light: the first one is used
+            li.enabled = False
+            if not l.light_map:
+                l.light_map = str(r.u16(o + 7))
+                l.light_map_intensity = li.amplitude
+                l.light_map_rotation = tuple((r.u8(o + k) - 128) / 256.0 * 360.0 for k in (9, 17, 25))
         lights.append(li)
     l.lights = lights
     palette = []
@@ -334,9 +347,10 @@ def _parse_light(r: _Rd, w: list[str]) -> Lighting:
     l.palette = palette
     bg_name = r.str(b + 384, 24)
     if bg_name and all(c.isprintable() for c in bg_name):
-        w.append(f"background picture '{bg_name}' is not supported")
-    if r.u8(b + 3) != 0 or r.u8(b + 68 + 32 + 16) != 0:
-        w.append("diffuse colour maps are not supported")
+        l.bg_image = bg_name
+        l.bg_direct = bool(tb_options & 0x8000)
+        l.bg_rotation = tuple((r.u8(k) - 128) / 256.0 * 360.0 for k in (b + 50, b + 51, b + 67))
+        l.bg_brightness = 1.04 ** (r.u8(b + 68 + 4 * 32 + 16) - 40)
     return l
 
 
@@ -415,11 +429,10 @@ def parse(data: bytes) -> M3pResult:
     s.color_option = min(r.u8(342), 5)
     s.color_mul = r.f32(338) if mand_id >= 22 else 1.0
     if r.u8(344) == 0:
-        w.append("2D slice calculation is not supported; rendering in 3D")
+        s.slice_2d = {1: 1, 3: 3}.get(r.u8(345), 2)
     s.first_step_random = bool(ioptions & 1)
-    smooth_normals = (ioptions >> 6) & 15
-    if smooth_normals:
-        w.append(f"smooth normals ({smooth_normals}) are not supported")
+    s.step_sub_de_stop = bool(ioptions & 4) and mand_id >= 36
+    s.smooth_normals = min(8, (ioptions >> 6) & 15)
     ao_bits = r.u8(149)
     if ao_bits & 1:
         kind = (ao_bits >> 2) & 3
@@ -431,7 +444,10 @@ def parse(data: bytes) -> M3pResult:
     s.cut_options = r.u8(176) & 7
     s.cut_pos = (r.f64(346), r.f64(354), r.f64(362))
     if r.u8(181) & 1:
-        w.append("depth of field is not supported")
+        s.post.dof = True
+        s.post.dof_focus = max(0.0, min(1.0, r.f32(164)))
+        s.post.dof_aperture = max(0.0001, min(2.0, r.f32(172))) * 100.0
+        s.post.dof_forward_only = bool((r.u8(181) >> 3) & 1)
     if mand_id >= 44 and (r.u8(343) & 7):
         w.append("volumetric light is not supported")
     s.lighting = _parse_light(r, w)
@@ -444,7 +460,7 @@ def parse(data: bytes) -> M3pResult:
         opt2 = r.u8(a + 2)
         hyb1 = r.u8(a + 5)
         if opt1 & 3 == 1:
-            w.append("interpolation hybrids are not supported; the formulas are run as an alternating hybrid")
+            s.interpolation = (r.f32(a + 8), r.f32(a + 8 + SLOT_SIZE))
         elif opt1 & 3 == 2:
             # CheckHybridOptions
             hyb2 = r.u16(a + 6)
@@ -460,15 +476,13 @@ def parse(data: bytes) -> M3pResult:
                 x2 -= 1
             repeat2 = min(repeat2, x2)
             kind = max(1, min(6, r.u8(a + 3) + 1))
-            if kind == 6:
-                w.append("DE combination 'mix' is not supported; the minimum is used")
-                kind = 1
             s.decomb = DeCombination(kind=kind, start2=start2, repeat_from2=repeat2, iterations2=max(1, r.i32(418)),
-                                     smooth=(r.f32(378) if mand_id >= 31 else 0.5))
+                                     smooth=(r.f32(378) if mand_id >= 31 else 0.5),
+                                     mix_pow=(r.f32(104) if mand_id >= 39 else 2.0),
+                                     mix_color=(r.u8(422) if mand_id >= 34 else 0))
         if opt2 & 1:
             s.analytic_de = False
-        if opt2 & 6:
-            w.append("inside rendering is not supported")
+        s.inside_mode = 2 if opt2 & 4 else (1 if opt2 & 2 else 0)
         s.repeat_from = hyb1 >> 4
         for i in range(6):
             o = a + 8 + i * SLOT_SIZE
@@ -477,6 +491,9 @@ def parse(data: bytes) -> M3pResult:
             nopt = max(0, min(16, r.i32(o + 8)))
             name = r.str(o + 12, 32)
             vals = [r.f64(o + 60 + 8 * k) for k in range(16)]
+            interp = opt1 & 3 == 1
+            if interp:
+                its = 1 if (i < 2 and fnr >= 0) else 0
             if its == 0:
                 continue
             if its < 0:

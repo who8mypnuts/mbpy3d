@@ -74,13 +74,26 @@ P_INSIDE_IT2 = 108
 P_REPEAT_FROM2 = 109
 P_NSLOTS2 = 110
 P_PIXEL_STEP = 111    # pixel stride of the calculated rectangle (1; the precision probe uses more)
+P_INSIDE_MODE = 112   # 0 outside, 1 inside rendering, 2 in and outside (per pixel)
+P_IPOL_W1 = 113       # interpolation hybrid weights (0 = alternating hybrid)
+P_IPOL_W2 = 114
+P_DECOMB_MIX_POW = 115
+P_DECOMB_MIX_COL = 116
+P_SMOOTH_NORMALS = 117  # 0..8 (MB3D's smooth normals; 8 = 5x5x5 cube)
+P_MC_SAMPLES = 118    # Monte Carlo sky visibility rays per pixel (0 = off)
+P_MC_SEED = 119
+P_MC_RANGE = 120      # max length of the rays in pixel units
+P_VOL_LIGHT = 121     # volumetric light: light index + 1 (0 = off)
+P_VOL_STEP = 122      # shadow test every n-th ray step
+P_REFLECT = 123       # reflections: 0 off, else the amount 0..1 (a second marched layer)
+P_SLICE_2D = 124      # 2D calculation of a plane: 0 off, 1 start plane, 2 middle, 3 far end
 # --- slot table: per slot (iterations, uncounted, fhln, reserved) ------------
-P_SLOTS = 112
+P_SLOTS = 128
 SLOT_STRIDE = 4
 # --- formula options ---------------------------------------------------------
-P_FORMULA = 144
+P_FORMULA = 160
 FSTRIDE = MAX_FORMULA_PARAMS
-N_PARAMS = P_FORMULA + MAX_SLOTS * FSTRIDE  # 336
+N_PARAMS = P_FORMULA + MAX_SLOTS * FSTRIDE  # 352
 
 # --- G-buffer channels --------------------------------------------------------
 G_DEPTH = 0       # distance along the ray in pixel units, < 0 = background
@@ -93,8 +106,19 @@ G_STEPS = 6       # ray steps (dynamic fog)
 G_AO = 7          # 1 = unoccluded
 G_SHADOW = 8      # 6 values: light factor 0..1 (1 = lit)
 G_ITER = 14
-G_DE = 15
-N_CHANNELS = 16
+G_ROUGH = 15      # surface roughness 0..1 (smooth normals)
+G_VOL = 16        # volumetric light: lit path length along the ray (pixel units)
+# --- the reflection layer (the reflected ray's hit) ----------------------------
+G_R_DEPTH = 17    # distance along the reflected ray (pixel units), < 0 none
+G_R_NX = 18
+G_R_NY = 19
+G_R_NZ = 20
+G_R_COLOR = 21
+G_R_OTRAP = 22
+G_R_AO = 23
+G_R_SHADOW = 24   # 6 values
+G_R_STEPS = 30
+N_CHANNELS = 32
 
 
 def c_defines() -> str:
