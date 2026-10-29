@@ -17,35 +17,45 @@ SPECS = registry.all_specs()
 
 def random_states(n: int, seed: int = 1) -> np.ndarray:
     rng = np.random.default_rng(seed)
-    io = np.zeros((n, 10))
+    io = np.zeros((n, 14))
     io[:, 0:3] = rng.uniform(-1.5, 1.5, (n, 3))       # z
     io[:, 3] = rng.uniform(-0.5, 0.5, n)              # w
     io[:, 4:7] = rng.uniform(-1.2, 1.2, (n, 3))       # c
     io[:, 7] = rng.uniform(-0.5, 0.5, n)              # cw
     io[:, 8] = rng.uniform(0.5, 3.0, n)               # dr
     io[:, 9] = np.sum(io[:, 0:3] ** 2, axis=1)        # r2
+    io[:, 10] = 1e30                                  # de
+    io[:, 12] = 0.01                                  # aux (the DE stop)
     return io
 
 
 def reference(spec, io: np.ndarray) -> np.ndarray:
     out = io.copy()
     for i in range(io.shape[0]):
-        s = State(vec3(*io[i, 0:3]), vec3(*io[i, 4:7]), w=io[i, 3], cw=io[i, 7], dr=io[i, 8], r2=io[i, 9])
+        s = State(vec3(*io[i, 0:3]), vec3(*io[i, 4:7]), w=io[i, 3], cw=io[i, 7], dr=io[i, 8], r2=io[i, 9],
+                  de=io[i, 10], trap=io[i, 11], aux=io[i, 12], vary=io[i, 13])
         spec.run(s)
         out[i, 0:3] = (s.z.x, s.z.y, s.z.z)
         out[i, 3] = s.w
         out[i, 4:7] = (s.c.x, s.c.y, s.c.z)
         out[i, 8] = s.dr
+        out[i, 10] = s.de
+        out[i, 11] = s.trap
+        out[i, 13] = s.vary
     return out
 
 
 def scene_for(spec) -> Scene:
     sc = Scene()
     sc.slots = [FormulaSlot(spec.name, 1, {})]
+    if spec.de == "difs_transform":
+        sc.slots.append(FormulaSlot("SphereIFS", 1, {}))  # a dIFS hybrid needs a shape
     return sc
 
 
 def assert_close(ref: np.ndarray, got: np.ndarray, rtol: float, name: str) -> None:
+    ref = np.where(np.abs(ref) > 1e20, 0.0, ref)   # untouched dIFS fields (1e30)
+    got = np.where(np.abs(got) > 1e20, 0.0, got)
     finite = np.isfinite(ref).all(axis=1) & np.isfinite(got).all(axis=1)
     assert finite.sum() >= ref.shape[0] * 0.8, f"{name}: too many non finite results"
     r, g = ref[finite], got[finite]
@@ -75,7 +85,7 @@ def test_numba_matches_reference(spec):
     ref = reference(spec, io)
     got = io.copy()
     mod.formula_test(P, 0, got)
-    assert_close(ref, got, 1e-9, spec.name)
+    assert_close(np.delete(ref, 9, 1), np.delete(got, 9, 1), 1e-9, spec.name)
 
 
 @pytest.mark.parametrize("spec", SPECS, ids=[s.name for s in SPECS])
@@ -85,9 +95,9 @@ def test_opencl_matches_reference(spec, opencl_backend):
     P = prog.pack(sc)
     io = random_states(200)
     ref = reference(spec, io)
-    got = opencl_backend.run_formula(prog, P, 0, io)
-    rtol = 1e-9 if opencl_backend.precision == "float64" else 2e-4
-    assert_close(ref[:, :9], got[:, :9], rtol, spec.name)
+    got = opencl_backend.run_formula(prog, P, 0, io, double=opencl_backend.double_ok)
+    rtol = 1e-9 if opencl_backend.double_ok else 2e-4
+    assert_close(np.delete(ref, 9, 1), np.delete(got, 9, 1), rtol, spec.name)
 
 
 @pytest.mark.parametrize("spec", SPECS, ids=[s.name for s in SPECS])
@@ -99,7 +109,7 @@ def test_glsl_matches_reference(spec, opengl_backend):
     ref = reference(spec, io)
     got = opengl_backend.run_formula(prog, P, 0, io)
     # single precision, and the bulb of power 8 amplifies rounding
-    assert_close(ref[:, :9], got[:, :9], 5e-3, spec.name)
+    assert_close(np.delete(ref, 9, 1), np.delete(got, 9, 1), 5e-3, spec.name)
 
 
 def test_hybrid_program_sources_include_all_slots():

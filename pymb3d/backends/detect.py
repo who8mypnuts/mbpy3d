@@ -20,17 +20,18 @@ from .base import Backend, BackendError, DeviceInfo
 class DeviceChoice:
     backend: str            # "cpu", "opencl", "opengl"
     name: str
-    precision: str
+    precision: str          # "float32", "float64" or "auto" (OpenCL: probe per render)
     kind: str
     index: tuple[int, int] = (0, 0)   # OpenCL platform/device
 
     @property
     def key(self) -> str:
-        return f"{self.backend}:{self.index[0]}:{self.index[1]}"
+        return f"{self.backend}:{self.index[0]}:{self.index[1]}:{self.precision}"
 
     @property
     def label(self) -> str:
-        return f"{self.backend}: {self.name} ({self.precision}, {self.kind})"
+        p = {"auto": "auto precision", "float32": "single precision", "float64": "double precision"}[self.precision]
+        return f"{self.backend}: {self.name} ({p}, {self.kind})"
 
 
 def available_devices(probe_opengl: bool = True) -> list[DeviceChoice]:
@@ -41,7 +42,10 @@ def available_devices(probe_opengl: bool = True) -> list[DeviceChoice]:
         from .opencl_backend import list_opencl_devices
 
         for pi, di, name, fp64, kind in list_opencl_devices():
-            out.append(DeviceChoice("opencl", name, "float64" if fp64 else "float32", kind, (pi, di)))
+            if fp64:
+                out.append(DeviceChoice("opencl", name, "auto", kind, (pi, di)))
+                out.append(DeviceChoice("opencl", name, "float64", kind, (pi, di)))
+            out.append(DeviceChoice("opencl", name, "float32", kind, (pi, di)))
     except Exception:
         pass
     if probe_opengl:
@@ -74,27 +78,25 @@ def probe_opengl_info() -> DeviceInfo | None:
 
 
 def _rank_final(d: DeviceChoice) -> tuple:
-    if d.backend == "opencl" and d.kind == "gpu" and d.precision == "float64":
-        return (0,)
-    if d.backend == "cpu":
-        return (1,)
     if d.backend == "opencl" and d.kind == "gpu":
-        return (2,)
+        return (0, {"auto": 0, "float64": 1, "float32": 2}[d.precision])
+    if d.backend == "cpu":
+        return (1, 0)
     if d.backend == "opencl":
-        return (3,)
-    return (9,)
+        return (3, {"auto": 0, "float64": 1, "float32": 2}[d.precision])
+    return (9, 0)
 
 
 def _rank_preview(d: DeviceChoice) -> tuple:
     if d.backend == "opengl" and d.kind == "gpu":
-        return (0,)
+        return (0, 0)
     if d.backend == "opencl" and d.kind == "gpu":
-        return (1,)
+        return (1, {"float32": 0, "auto": 1, "float64": 2}[d.precision])
     if d.backend == "cpu":
-        return (2,)
+        return (2, 0)
     if d.backend == "opencl":
-        return (3,)
-    return (4,)  # software OpenGL
+        return (3, {"float32": 0, "auto": 1, "float64": 2}[d.precision])
+    return (4, 0)  # software OpenGL
 
 
 def choose(devices: list[DeviceChoice], purpose: str) -> DeviceChoice:
@@ -115,7 +117,7 @@ def create_backend(choice: DeviceChoice) -> Backend:
     if choice.backend == "opencl":
         from .opencl_backend import OpenCLBackend
 
-        return OpenCLBackend(choice.index[0], choice.index[1])
+        return OpenCLBackend(choice.index[0], choice.index[1], precision=choice.precision)
     if choice.backend == "opengl":
         from .opengl_backend import OpenGLBackend
 

@@ -51,6 +51,12 @@ class LightEditor(QWidget):
             self.diff.addItem(name)
         self.relative = QCheckBox("relative to the object (world space)")
         self.shadows = QCheckBox("casts shadows")
+        self.positional = QCheckBox("positional light at")
+        self.position = [DoubleSpin(0.0, -1e9, 1e9, 4, 0.1) for _ in range(3)]
+        prow = QHBoxLayout()
+        prow.addWidget(self.positional)
+        for sp in self.position:
+            prow.addWidget(sp)
         row = QHBoxLayout()
         row.addWidget(self.enabled)
         row.addWidget(QLabel("colour"))
@@ -65,6 +71,10 @@ class LightEditor(QWidget):
         form.addRow("diffuse function", self.diff)
         form.addRow(self.relative)
         form.addRow(self.shadows)
+        form.addRow(prow)
+        self.positional.toggled.connect(lambda v: self._set("positional", bool(v), "render"))
+        for sp in self.position:
+            sp.valueChanged.connect(self._position_changed)
         self.selector.currentIndexChanged.connect(self._select)
         self.enabled.toggled.connect(lambda v: self._set("enabled", bool(v)))
         self.color.colorChanged.connect(lambda c: self._set("color", tuple(c)))
@@ -91,7 +101,16 @@ class LightEditor(QWidget):
         self.diff.setCurrentIndex(li.diff_func & 3)
         self.relative.setChecked(li.relative_to_object)
         self.shadows.setChecked(li.shadows)
+        self.positional.setChecked(li.positional)
+        for sp, v in zip(self.position, li.position):
+            sp.set_silently(float(v))
         self._loading = False
+
+    def _position_changed(self, _v: float) -> None:
+        if self._loading:
+            return
+        self.light().position = tuple(sp.value() for sp in self.position)  # type: ignore[assignment]
+        self.model.touch("render" if (self.model.scene.shadows and self.light().positional) else "lighting")
 
     def _select(self, i: int) -> None:
         self.index = i

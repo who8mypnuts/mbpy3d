@@ -109,26 +109,40 @@ def bulbox(s, p):
 
 
 @helper
-def rotate_xyz_sc(v: vec3, sx: real, cx: real, sy: real, cy: real, sz: real, cz: real) -> vec3:
-    """Rotate about X, then Y, then Z, given the sines and cosines of the
-    angles (computed once on the host, see :func:`rotation_params`)."""
-    y1 = cx * v.y - sx * v.z
-    z1 = sx * v.y + cx * v.z
-    x2 = cy * v.x + sy * z1
-    z2 = -sy * v.x + cy * z1
-    return vec3(cz * x2 - sz * y1, sz * x2 + cz * y1, z2)
+def rot_apply(v: vec3, m0: real, m1: real, m2: real, m3: real, m4: real, m5: real, m6: real, m7: real,
+              m8: real) -> vec3:
+    """v' = M v with the rotation matrix rows (m0 m1 m2), (m3 m4 m5), (m6 m7 m8)."""
+    return vec3(m0 * v.x + m1 * v.y + m2 * v.z, m3 * v.x + m4 * v.y + m5 * v.z, m6 * v.x + m7 * v.y + m8 * v.z)
+
+
+def build_rot_matrix(xa: float, ya: float, za: float) -> list[float]:
+    """MB3D's `BuildRotMatrix` of a `3SingleAngles` option (radians), row major."""
+    import math as _m
+
+    sx, cx = _m.sin(xa), _m.cos(xa)
+    sy, cy = _m.sin(ya), _m.cos(ya)
+    sz, cz = _m.sin(za), _m.cos(za)
+    return [cy * cz, -cy * sz, sy,
+            sx * sy * cz + cx * sz, cx * cz - sx * sy * sz, -sx * cy,
+            sx * sz - cx * sy * cz, cx * sy * sz + sx * cz, cx * cy]
 
 
 def rotation_params(prefix: str, label: str = "rotation") -> list:
     """Three editable angle options (degrees) ``<prefix>_x/y/z`` plus the
-    derived sines and cosines ``<prefix>_sx, _cx, ...`` the formula uses."""
+    nine derived matrix entries ``<prefix>_m0..m8`` (MB3D's 3SingleAngles)."""
     import math as _m
 
     out = [Param(f"{prefix}_{a}", 0.0, "real", f"{label} {a.upper()} (degrees)") for a in "xyz"]
-    for a in "xyz":
-        out.append(Param(f"{prefix}_s{a}", 0.0, derived=lambda v, k=f"{prefix}_{a}": _m.sin(_m.radians(v[k]))))
-        out.append(Param(f"{prefix}_c{a}", 1.0, derived=lambda v, k=f"{prefix}_{a}": _m.cos(_m.radians(v[k]))))
+    for k in range(9):
+        out.append(Param(f"{prefix}_m{k}", 1.0 if k in (0, 4, 8) else 0.0,
+                         derived=lambda v, k=k, p=prefix: build_rot_matrix(
+                             _m.radians(v[f"{p}_x"]), _m.radians(v[f"{p}_y"]), _m.radians(v[f"{p}_z"]))[k]))
     return out
+
+
+def ROT(prefix: str) -> str:
+    """The argument list of :func:`rot_apply` for a rotation ``prefix`` (source text helper)."""
+    return ", ".join(f"p.{prefix}_m{k}" for k in range(9))
 
 
 @formula(
@@ -163,7 +177,7 @@ def amazing_surf(s, p):
         m = scale / rr
     s.dr = s.dr * fabs(m)
     v = vec3(x, y, z) * m + s.c
-    s.z = rotate_xyz_sc(v, p.rot_sx, p.rot_cx, p.rot_sy, p.rot_cy, p.rot_sz, p.rot_cz)
+    s.z = rot_apply(v, p.rot_m0, p.rot_m1, p.rot_m2, p.rot_m3, p.rot_m4, p.rot_m5, p.rot_m6, p.rot_m7, p.rot_m8)
 
 
 @formula(
@@ -191,3 +205,68 @@ def abox_mod(s, p):
     m = sphere_fold_mul(dot(f, f), p.scale, p.min_r)
     s.dr = s.dr * fabs(m)
     s.z = f * m + s.c * p.c_mul
+
+
+@formula(
+    name="ABoxModKali",
+    params=[Param("scale", 1.5, "real", "scale", mb3d_name="Scale"),
+            Param("min_r", 0.6, "real", "minimum radius", mb3d_name="Boxscale Min R"),
+            Param("z_add", 0.5, "real", "Z add", mb3d_name="Z add"),
+            Param("y_add", 0.5, "real", "Y add", mb3d_name="Y add"),
+            Param("x_add", 0.5, "real", "X add", mb3d_name="X add")],
+    de="linear",
+    de_scale=0.15,
+    ade_scale=0.5,
+    rstop=1024.0,
+    category="3D boxes",
+    description="Kali's modified Amazing Box (MB3D's ABoxModKali): x = Xadd - |x| then the sphere fold.",
+    aliases=("aboxmodkali",),
+    scale_param="scale",
+)
+def abox_mod_kali(s, p):
+    f = vec3(p.x_add - fabs(s.z.x), p.y_add - fabs(s.z.y), p.z_add - fabs(s.z.z))
+    m = sphere_fold_mul(dot(f, f), p.scale, p.min_r)
+    s.dr = s.dr * fabs(m)
+    s.z = f * m + s.c
+
+
+@helper
+def fold_mod(x: real, fold: real, fmod: real) -> real:
+    """ABoxMod1's fold: Fold - |(|x + FoldMod|) - Fold| - |FoldMod|."""
+    return fold - fabs(fabs(x + fmod) - fold) - fabs(fmod)
+
+
+@formula(
+    name="ABoxMod1",
+    params=[Param("scale", 2.0, "real", "scale", mb3d_name="Scale"),
+            Param("min_r", 0.0, "real", "minimum radius", mb3d_name="Boxscale Min R"),
+            Param("fold", 2.0, "real", "fold", mb3d_name="Fold"),
+            Param("scale_vary", 0.0, "real", "scale changes every iteration by vary * (|scale| - 1)",
+                  mb3d_name="Scale vary"),
+            Param("fold_x_mod", 0.0, "real", "fold X modifier", mb3d_name="FoldXMod"),
+            Param("fold_y_mod", 0.0, "real", "fold Y modifier", mb3d_name="FoldYMod"),
+            Param("fold_z_mod", 0.0, "real", "fold Z modifier", mb3d_name="FoldZMod")],
+    de="linear",
+    de_scale=0.2,
+    rstop=1024.0,
+    category="3D boxes",
+    description="MB3D's ABoxMod1 (after Kali): modified folds, a scale that may vary per iteration.",
+    aliases=("aboxmod1",),
+    scale_param="scale",
+)
+def abox_mod1(s, p):
+    if s.vary == 0.0:
+        s.vary = p.scale
+    s.vary = s.vary + p.scale_vary * (fabs(s.vary) - 1.0)
+    sc = s.vary
+    f = vec3(fold_mod(s.z.x, p.fold, p.fold_x_mod), fold_mod(s.z.y, p.fold, p.fold_y_mod),
+             fold_mod(s.z.z, p.fold, p.fold_z_mod))
+    rr = dot(f, f)
+    mr2 = p.min_r * p.min_r
+    m = sc
+    if rr < mr2:
+        m = p.scale / mr2
+    elif rr < 1.0:
+        m = sc / rr
+    s.dr = s.dr * fabs(m)
+    s.z = f * m + s.c

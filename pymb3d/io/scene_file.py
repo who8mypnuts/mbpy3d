@@ -8,7 +8,14 @@ from ..core.scene import Scene
 
 
 def save_scene(scene: Scene, path: str | Path) -> None:
-    Path(path).write_text(json.dumps(scene.to_dict(), indent=2))
+    """JSON, or a MB3D parameter file when the name ends in .m3p."""
+    p = Path(path)
+    if p.suffix.lower() == ".m3p":
+        from .m3p_write import save_m3p
+
+        save_m3p(scene, p)
+        return
+    p.write_text(json.dumps(scene.to_dict(), indent=2))
 
 
 def load_scene(path: str | Path) -> tuple[Scene, list[str]]:

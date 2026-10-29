@@ -21,9 +21,13 @@ STATE_VARS = {
     "cw": "s_cw",
     "dr": "s_dr",
     "r2": "s_r2",
+    "de": "s_de",
+    "trap": "s_trap",
+    "aux": "s_aux",
+    "vary": "s_vary",
 }
-STATE_ARGS = "s_zx, s_zy, s_zz, s_w, s_cx, s_cy, s_cz, s_cw, s_dr, s_r2"
-STATE_RETURN = "s_zx, s_zy, s_zz, s_w, s_cx, s_cy, s_cz, s_dr"
+STATE_ARGS = "s_zx, s_zy, s_zz, s_w, s_cx, s_cy, s_cz, s_cw, s_dr, s_r2, s_de, s_trap, s_aux, s_vary"
+STATE_RETURN = "s_zx, s_zy, s_zz, s_w, s_cx, s_cy, s_cz, s_dr, s_de, s_trap, s_vary"
 
 PY_PRELUDE = '''
 import math

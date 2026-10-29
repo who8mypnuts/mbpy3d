@@ -18,7 +18,7 @@ import numpy as np
 
 from ..core.camera import Camera
 from ..core.lights import Light, Lighting, PaletteStop
-from ..core.scene import AOSettings, FormulaSlot, Scene
+from ..core.scene import AOSettings, DeCombination, FormulaSlot, Scene
 from ..core.vec import normalise_matrix_to
 from ..formulas import registry
 
@@ -412,9 +412,8 @@ def parse(data: bytes) -> M3pResult:
         m = matrix_from_quat([m[0, 0], m[0, 1], m[0, 2], m[1, 0]])
     s.camera = Camera(mid=mid, zoom=zoom, fov_y=fov_y, z_start=z_start, z_end=z_end,
                       vgrads=normalise_matrix_to(1.0, m))
-    color_option = min(r.u8(342), 5)
-    if color_option != 0:
-        w.append(f"colour option {color_option} is rendered as the default (orbit trap / iterations)")
+    s.color_option = min(r.u8(342), 5)
+    s.color_mul = r.f32(338) if mand_id >= 22 else 1.0
     if r.u8(344) == 0:
         w.append("2D slice calculation is not supported; rendering in 3D")
     s.first_step_random = bool(ioptions & 1)
@@ -447,7 +446,25 @@ def parse(data: bytes) -> M3pResult:
         if opt1 & 3 == 1:
             w.append("interpolation hybrids are not supported; the formulas are run as an alternating hybrid")
         elif opt1 & 3 == 2:
-            w.append("DE combinations are not supported; all formulas are run as one alternating hybrid")
+            # CheckHybridOptions
+            hyb2 = r.u16(a + 6)
+            its = lambda i: r.i32(a + 8 + i * SLOT_SIZE)  # noqa: E731
+            x = 5
+            while x > 0 and its(x) == 0:
+                x -= 1
+            start2 = max(1, min(hyb2 & 7, x))
+            end2 = max(start2, x)
+            repeat2 = max(start2, min((hyb2 >> 8) & 7, end2))
+            x2 = 5
+            while x2 > start2 and its(x2) <= 0:
+                x2 -= 1
+            repeat2 = min(repeat2, x2)
+            kind = max(1, min(6, r.u8(a + 3) + 1))
+            if kind == 6:
+                w.append("DE combination 'mix' is not supported; the minimum is used")
+                kind = 1
+            s.decomb = DeCombination(kind=kind, start2=start2, repeat_from2=repeat2, iterations2=max(1, r.i32(418)),
+                                     smooth=(r.f32(378) if mand_id >= 31 else 0.5))
         if opt2 & 1:
             s.analytic_de = False
         if opt2 & 6:
@@ -466,9 +483,10 @@ def parse(data: bytes) -> M3pResult:
                 w.append(f"slot {i + 1} ('{name}'): uncounted iterations are run as counted")
                 its = -its
             slot = _formula_slot(fnr, name, vals, nopt, its, w)
-            if slot is not None:
-                s.slots.append(slot)
-    if not s.slots:
+            # a missing formula leaves an inactive slot so that the slot
+            # indices of the hybrid options keep their meaning
+            s.slots.append(slot if slot is not None else FormulaSlot("Integer Power", 0, {}))
+    if not any(x.active for x in s.slots):
         w.append("no usable formula; using the default Mandelbulb")
         s.slots = [FormulaSlot("Integer Power", 1, {"power": 8})]
     s.repeat_from = min(s.repeat_from, max(0, len(s.slots) - 1))

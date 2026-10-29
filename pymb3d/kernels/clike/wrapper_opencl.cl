@@ -9,8 +9,8 @@ __kernel void march_kernel(__constant const real *P, __global real *out, const i
     int o;
     int i;
     if (lx >= rect_w || ly >= rect_h) return;
-    px = TO_REAL(lx) + PARAM(P_RECT_X);
-    py = TO_REAL(ly) + PARAM(P_RECT_Y);
+    px = TO_REAL(lx) * PARAM(P_PIXEL_STEP) + PARAM(P_RECT_X);
+    py = TO_REAL(ly) * PARAM(P_PIXEL_STEP) + PARAM(P_RECT_Y);
     g = shade_pixel(FN_PASS px, py);
     o = (ly * rect_w + lx) * N_CHANNELS;
     out[o + G_DEPTH] = g.depth;
@@ -26,19 +26,24 @@ __kernel void march_kernel(__constant const real *P, __global real *out, const i
     out[o + G_DE] = g.de;
 }
 
-/* Iterates one formula slot on a buffer of states (the transpiler tests). */
+/* Iterates one formula slot on a buffer of states (the transpiler tests):
+ * 14 reals per state: z, w, c, cw, dr, r2, de, trap, aux, vary. */
 __kernel void formula_test_kernel(__constant const real *P, const int slot, __global real *io, const int n) {
     int i = get_global_id(0);
     State s;
     int o;
     if (i >= n) return;
-    o = i * 10;
+    o = i * 14;
     s.z = V3(io[o], io[o + 1], io[o + 2]);
     s.w = io[o + 3];
     s.c = V3(io[o + 4], io[o + 5], io[o + 6]);
     s.cw = io[o + 7];
     s.dr = io[o + 8];
     s.r2 = io[o + 9];
+    s.de = io[o + 10];
+    s.trap = io[o + 11];
+    s.aux = io[o + 12];
+    s.vary = io[o + 13];
     s = run_slot(FN_PASS slot, s);
     io[o] = s.z.x;
     io[o + 1] = s.z.y;
@@ -50,4 +55,8 @@ __kernel void formula_test_kernel(__constant const real *P, const int slot, __gl
     io[o + 7] = s.cw;
     io[o + 8] = s.dr;
     io[o + 9] = s.r2;
+    io[o + 10] = s.de;
+    io[o + 11] = s.trap;
+    io[o + 12] = s.aux;
+    io[o + 13] = s.vary;
 }

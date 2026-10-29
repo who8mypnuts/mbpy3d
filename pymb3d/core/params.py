@@ -35,12 +35,14 @@ P_FIRST_STEP_RANDOM = 28
 P_DE_MODE = 29        # 0 numeric gradient, 1 linear (r / dr), 2 logarithmic
 P_DE_SCALE = 30       # combined DE scale
 P_DE_OFFSET_PX = 31   # gradient offset (pixels)
+P_INSIDE_IT = 32      # iteration count from which a point counts as inside (max_it, +1 for dIFS)
 P_JULIA = 33
 P_JULIA_C = 34        # 4 values
 P_NSLOTS = 38
 P_REPEAT_FROM = 39
 P_COL_PLUS = 40
 P_COL_VAR = 41
+P_COLOR_OPTION = 42   # MB3D's 2nd colour choice 0..5
 P_FOUR_D = 43
 P_AO_MODE = 44        # 0 none, 1 ssao (outside the kernel), 2 DE AO
 P_AO_SAMPLES = 45
@@ -60,21 +62,33 @@ P_RECT_X = 97         # origin of the calculated rectangle in the full image
 P_RECT_Y = 98
 P_FULL_WIDTH = 99     # size of the full image (the camera is set up for it)
 P_FULL_HEIGHT = 100
+P_COLOR_MUL = 101     # colour option 1 multiplier
+P_MCTS_M = 102        # 32767 / (iterations + 1)
+# --- DE combination (second hybrid part) -------------------------------------
+P_DECOMB_KIND = 103   # 0 none, 1 min, 2 max, 3 inverted max, 4/5 smooth minima
+P_DECOMB_SMOOTH = 104 # smoothing distance (pixels)
+P_DE_MODE2 = 105
+P_DE_SCALE2 = 106
+P_MAX_IT2 = 107
+P_INSIDE_IT2 = 108
+P_REPEAT_FROM2 = 109
+P_NSLOTS2 = 110
+P_PIXEL_STEP = 111    # pixel stride of the calculated rectangle (1; the precision probe uses more)
 # --- slot table: per slot (iterations, uncounted, fhln, reserved) ------------
-P_SLOTS = 104
+P_SLOTS = 112
 SLOT_STRIDE = 4
 # --- formula options ---------------------------------------------------------
-P_FORMULA = 128
+P_FORMULA = 144
 FSTRIDE = MAX_FORMULA_PARAMS
-N_PARAMS = P_FORMULA + MAX_SLOTS * FSTRIDE  # 320
+N_PARAMS = P_FORMULA + MAX_SLOTS * FSTRIDE  # 336
 
 # --- G-buffer channels --------------------------------------------------------
 G_DEPTH = 0       # distance along the ray in pixel units, < 0 = background
 G_NX = 1
 G_NY = 2
 G_NZ = 3
-G_COLOR = 4       # colour index (smooth iterations + offsets), see shading
-G_OTRAP = 5       # min |z|^2 over the orbit
+G_COLOR = 4       # MB3D's si_gradient 0..32767 (colour index)
+G_OTRAP = 5       # MB3D's orbit trap colour value 0..32767 (2nd colour choice)
 G_STEPS = 6       # ray steps (dynamic fog)
 G_AO = 7          # 1 = unoccluded
 G_SHADOW = 8      # 6 values: light factor 0..1 (1 = lit)

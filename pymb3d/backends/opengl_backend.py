@@ -59,6 +59,7 @@ def _create_context():
 
 class OpenGLBackend(Backend):
     name = "opengl"
+    band_target_seconds = 0.1
 
     def __init__(self) -> None:
         super().__init__()
@@ -136,8 +137,8 @@ class OpenGLBackend(Backend):
 
     # ---------------------------------------------------------- test hook
     def run_formula(self, program: Program, P: np.ndarray, slot: int, states: np.ndarray) -> np.ndarray:
-        """Applies formula ``slot`` once to ``states`` (n, 10) through a small
-        test shader (the transpiler equivalence tests)."""
+        """Applies formula ``slot`` once to ``states`` (n, 13) through a small
+        test shader (the transpiler equivalence tests); states are (n, 14)."""
         self.ensure_context()
         n = states.shape[0]
         src = "\n".join([
@@ -146,28 +147,28 @@ class OpenGLBackend(Backend):
         ])
         prg = self.ctx.program(vertex_shader=_load_vertex_source(), fragment_shader=src)
         vao = self.ctx.vertex_array(prg, [])
-        # 10 values per state: two RGBA texels + 2 spare -> pack into 3 texels
-        packed = np.zeros((n, 12), dtype=np.float32)
-        packed[:, :10] = states
-        tex_in = self.ctx.texture((3, n), 4, dtype="f4", data=packed.reshape(n, 3, 4).tobytes())
-        outs = [self.ctx.texture((3, n), 4, dtype="f4") for _ in range(1)]
+        # 14 values per state in four RGBA texels
+        packed = np.zeros((n, 16), dtype=np.float32)
+        packed[:, :14] = states
+        tex_in = self.ctx.texture((4, n), 4, dtype="f4", data=packed.reshape(n, 4, 4).tobytes())
+        outs = [self.ctx.texture((4, n), 4, dtype="f4")]
         fbo = self.ctx.framebuffer(color_attachments=outs)
         fbo.use()
-        self.ctx.viewport = (0, 0, 3, n)
+        self.ctx.viewport = (0, 0, 4, n)
         _write_params(prg, np.ascontiguousarray(P, dtype=np.float32))
         prg["u_slot"].value = int(slot)
         tex_in.use(location=0)
         prg["u_states"].value = 0
         vao.render(mode=4, vertices=3)
         self.ctx.finish()
-        res = np.frombuffer(fbo.read(components=4, attachment=0, dtype="f4"), dtype=np.float32).reshape(n, 12)
+        res = np.frombuffer(fbo.read(components=4, attachment=0, dtype="f4"), dtype=np.float32).reshape(n, 16)
         fbo.release()
         for t in outs:
             t.release()
         tex_in.release()
         vao.release()
         prg.release()
-        return res[:, :10].astype(np.float64)
+        return res[:, :14].astype(np.float64)
 
     def close(self) -> None:
         if self.ctx is not None:
@@ -188,6 +189,7 @@ void main() {
     vec4 a = texelFetch(u_states, ivec2(0, row), 0);
     vec4 b = texelFetch(u_states, ivec2(1, row), 0);
     vec4 c = texelFetch(u_states, ivec2(2, row), 0);
+    vec4 d = texelFetch(u_states, ivec2(3, row), 0);
     State s;
     s.z = a.xyz;
     s.w = a.w;
@@ -195,9 +197,14 @@ void main() {
     s.cw = b.w;
     s.dr = c.x;
     s.r2 = c.y;
+    s.de = c.z;
+    s.trap = c.w;
+    s.aux = d.x;
+    s.vary = d.y;
     s = run_slot(u_slot, s);
     if (col == 0) o0 = vec4(s.z, s.w);
     else if (col == 1) o0 = vec4(s.c, s.cw);
-    else o0 = vec4(s.dr, s.r2, 0.0, 0.0);
+    else if (col == 2) o0 = vec4(s.dr, s.r2, s.de, s.trap);
+    else o0 = vec4(s.aux, s.vary, 0.0, 0.0);
 }
 """

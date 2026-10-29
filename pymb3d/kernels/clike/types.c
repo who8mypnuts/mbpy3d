@@ -8,6 +8,10 @@ STRUCT_BEGIN(State)
     real cw;
     real dr;
     real r2;
+    real de;
+    real trap;
+    real aux;
+    real vary;
 STRUCT_END(State)
 
 STRUCT_BEGIN(Orbit)
@@ -21,6 +25,8 @@ STRUCT_END(Orbit)
 STRUCT_BEGIN(DeResult)
     Orbit o;
     real de;
+    real sit;
+    bool inside;
 STRUCT_END(DeResult)
 
 STRUCT_BEGIN(Ray)
@@ -33,9 +39,8 @@ STRUCT_BEGIN(Hit)
     bool at_start;
     real t;
     real3 pos;
-    real de;
     real steps;
-    Orbit o;
+    DeResult r;
 STRUCT_END(Hit)
 
 STRUCT_BEGIN(Pixel)

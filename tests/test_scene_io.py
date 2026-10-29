@@ -96,3 +96,50 @@ def test_text_parameters_round_trip():
     sc, warnings = scene_from_clipboard_text(text)
     assert sc.width == 320 and sc.slots[0].name == "Integer Power" and sc.slots[0].params["power"] == 8.0
     assert math.isclose(sc.camera.zoom, 1.5)
+
+
+def test_m3p_export_round_trip(tmp_path):
+    from pymb3d.core.scene import DeCombination
+    from pymb3d.io.m3p_write import to_text, write
+    from pymb3d.io.m3p import parse, load_text
+
+    sc = default_scene()
+    sc.width, sc.height = 300, 200
+    sc.slots = [FormulaSlot("Amazing Box", 3, {"scale": -1.7, "min_r": 0.4}), FormulaSlot("Menger3", 2, {"scale": 3.2, "rot2_y": 25.0})]
+    sc.iterations = 40
+    sc.julia, sc.julia_c = True, (0.1, 0.2, 0.3, 0.0)
+    sc.shadows = True
+    sc.decomb = DeCombination(kind=4, start2=1, repeat_from2=1, iterations2=7, smooth=0.25)
+    sc.lighting.lights[1].enabled = True
+    sc.lighting.palette[2].diffuse = (0.1, 0.2, 0.3)
+    sc.lighting.color_start = 40
+    back = parse(write(sc)).scene
+    assert (back.width, back.height, back.iterations) == (300, 200, 40)
+    assert [s.name for s in back.slots if s.active] == ["Amazing Box", "Menger3"]
+    assert back.slots[0].params["scale"] == -1.7 and back.slots[1].params["rot2_y"] == 25.0
+    assert back.julia and math.isclose(back.julia_c[1], 0.2)
+    assert back.shadows and back.decomb.kind == 4 and back.decomb.start2 == 1 and back.decomb.iterations2 == 7
+    assert math.isclose(back.decomb.smooth, 0.25, rel_tol=1e-6)
+    assert back.lighting.lights[1].enabled and back.lighting.color_start == 40
+    assert np.allclose(back.lighting.palette[2].diffuse, (0.1, 0.2, 0.3), atol=1 / 255)
+    assert np.allclose(back.camera.vgrads, sc.camera.vgrads, atol=1e-9)
+    assert math.isclose(back.camera.zoom, sc.camera.zoom)
+    # text parameters and the file
+    sc2, _ = scene_from_clipboard_text(to_text(sc, "hello"))
+    assert sc2.slots[1].name == "Menger3" and sc2.title == "hello"
+    p = tmp_path / "out.m3p"
+    save_scene(sc, p)
+    sc3, _ = load_scene(p)
+    assert sc3.iterations == 40
+
+
+def test_lighting_presets(tmp_path):
+    from pymb3d.io import load_lighting, save_lighting
+
+    sc = default_scene()
+    sc.lighting.ambient_top = (0.9, 0.1, 0.1)
+    p = tmp_path / "light.json"
+    save_lighting(sc.lighting, p)
+    l = load_lighting(p)
+    assert l.ambient_top == (0.9, 0.1, 0.1)
+    assert len(l.lights) == 6 and len(l.palette) == 10

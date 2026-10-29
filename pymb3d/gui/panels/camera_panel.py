@@ -2,6 +2,8 @@
 start / end planes and the cutting planes."""
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from PySide6.QtWidgets import QCheckBox, QFormLayout, QGroupBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
@@ -54,6 +56,14 @@ class CameraPanel(QWidget):
             r.addWidget(sp)
             cform.addRow(r)
         lay.addWidget(cut)
+
+        r4 = QGroupBox("4D rotation (XW, YW, ZW planes, degrees)")
+        rf = QHBoxLayout(r4)
+        self.rot4d = [DoubleSpin(0.0, -3600, 3600, 3, 1.0) for _ in range(3)]
+        for sp in self.rot4d:
+            rf.addWidget(sp)
+            sp.valueChanged.connect(self._rot4d_changed)
+        lay.addWidget(r4)
         lay.addStretch(1)
 
         for sp in self.mid:
@@ -90,7 +100,15 @@ class CameraPanel(QWidget):
             c.setChecked(bool(sc.cut_options & (1 << k)))
             c.blockSignals(False)
             sp.set_silently(sc.cut_pos[k])
+        for sp, v in zip(self.rot4d, sc.rot_4d):
+            sp.set_silently(math.degrees(v))
         self._loading = False
+
+    def _rot4d_changed(self, _v: float) -> None:
+        if self._loading:
+            return
+        self.model.scene.rot_4d = tuple(math.radians(sp.value()) for sp in self.rot4d)  # type: ignore[assignment]
+        self.model.touch("formulas")
 
     def _on_changed(self, kind: str) -> None:
         if kind == "camera":  # navigation changed the camera: show the values

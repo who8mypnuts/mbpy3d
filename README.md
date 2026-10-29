@@ -61,11 +61,17 @@ numba results are bit-identical, OpenGL differs by single precision only
 ### Rendering pipeline
 
 1. `Program.from_scene` collects the formula slots, decides the distance
-   estimation mode (analytic *linear* for box type formulas, analytic *log*
-   for bulbs, MB3D's 4-point numerical gradient for anything mixed) and
-   generates the code.  Option values, iteration counts, camera, lights … are
-   **runtime parameters** (one flat float array, `core/params.py`), so
-   sliders never recompile a kernel.
+   estimation mode of each hybrid part (analytic *linear* for box type
+   formulas, analytic *log* for bulbs, MB3D's 4-point numerical gradient for
+   anything mixed, the *dIFS* loop for distance-estimated IFS shapes) and
+   generates the code, including the hybrid loop **specialised for the
+   slots** (`kernels/loopgen.py`: no per-iteration formula dispatch, no
+   dynamic parameter indexing — 2.5x faster kernels than the generic loop).
+   Option values, iteration counts, camera, lights … are **runtime
+   parameters** (one flat float array, `core/params.py`), so sliders never
+   recompile a kernel.  Two parts can be combined by their distance
+   estimates (MB3D's *DE combination*: minimum, maximum, inverted maximum,
+   two smooth minima).
 2. The backend marches the image in bands (progress, cancellation, live
    display) and returns a G-buffer: depth, normal, colour index (smooth
    iteration count), orbit trap, ray steps, DE ambient occlusion, one soft
@@ -106,33 +112,60 @@ here render to MB3D's look.
 * `Edit > Paste parameters` accepts MB3D text parameters
   (`Mandelbulb3Dv18{...}`) or pymb3d JSON from the clipboard.
 
-### Devices
+### Devices and GPU speed
 
 `backends/detect.py` lists the numba CPU backend, every OpenCL device (with
 `cl_khr_fp64` where available) and an OpenGL 3.3 context (EGL/GLX on Linux,
 WGL on Windows, CGL on macOS through moderngl).  Defaults: preview on OpenGL
-of a real GPU, final render on an OpenCL GPU with double precision, the CPU
-otherwise; software OpenGL (llvmpipe) and CPU OpenCL runtimes (pocl) are
-available but ranked below numba.  `PYMB3D_BACKEND=cpu|opencl|opengl`
-forces a backend.  Render timings are recorded with polars
+of a real GPU, final render on an OpenCL GPU, the CPU otherwise; software
+OpenGL (llvmpipe) and CPU OpenCL runtimes (pocl) are available but ranked
+below numba.  `PYMB3D_BACKEND=cpu|opencl|opengl` forces a backend.
+
+Consumer graphics cards run double precision at 1/16 to 1/64 of their
+single precision rate.  The OpenCL backend therefore defaults to **auto
+precision**: before a render it marches a coarse version of the image
+(every k-th pixel) in both precisions and compares hits, depths and colour
+indices (`backends/precision.py`); single precision is used unless they
+differ (deep zooms).  The devices list also offers fixed single / double
+precision.  Kernel launches are sized adaptively to about 0.1 s so the
+display driver stays responsive and progress / cancellation are quick; the
+coarse preview pass skips shadows and occlusion.  Render timings are recorded with polars
 (`stats/benchmark.py`, `~/.cache/pymb3d/render_history.parquet`) and shown
 on the Info tab.  Generated numba modules are cached in
 `~/.cache/pymb3d/gen` (`PYMB3D_CACHE` overrides the location), so a formula
 combination compiles once per machine.
 
+### More features
+
+* **dIFS** (MB3D's distance estimated IFS): `SphereIFS`, `boxIFS`,
+  `cylinderIFS` shapes and the `transformIFS` transform, ported from the
+  machine code of the `.m3f` files (option order kept, so `.m3p` files load).
+* **DE combinations** of two hybrid parts, MB3D's **2nd colour choice**
+  (orbit trap modes), **positional lights**, 4D rotation, exact
+  `3SingleAngles` rotation matrices.
+* **Animation** (`core/animation.py`, *Render > Animation*): keyframes taken
+  from the scene; every numeric setting is a column of a polars DataFrame
+  interpolated per frame (linear or eased), the camera rotation by
+  quaternion slerp, the zoom logarithmically.  Frames render in a worker
+  thread to numbered PNGs, and to an MP4 when ffmpeg is installed.
+* **Export** to `.m3p` / MB3D text parameters (*File > Export*, *Edit > Copy
+  parameters*), lighting presets (`.json`, MB3D `.m3l`), render data files
+  (`.npz` with the G-buffer and the scene) that can be re-lit later.
+
 ## Formulas included
 
 MB3D's internal formulas ported from `formulas.pas`: Integer Power (2..8),
 Real Power, Quaternion, Tricorn, Amazing Box, Bulbox, Folding Int Pow,
-Aexion C; plus Mandelbulb IQ, Amazing Surf, ABox Mod, Menger3, Sierpinski3,
-Octahedral KIFS and a Sphere Inversion transform.  MB3D's 460 custom
-`.m3f` formulas are x86 machine code and cannot run here; the popular ones
-are being re-implemented natively (names match the `.m3f` files so `.m3p`
-files find them).
+Aexion C.  Custom formulas re-implemented from their `.m3f` machine code
+(names match, so `.m3p` files find them): Menger3, MengerIFS, Amazing Surf,
+ABoxMod1, ABoxModKali, SphereIFS, boxIFS, cylinderIFS, transformIFS,
+_Rotate; plus Mandelbulb IQ, ABox Mod, Sierpinski3, Octahedral KIFS and a
+Sphere Inversion transform.  The rest of MB3D's 460 `.m3f` formulas are x86
+machine code and are ported one by one.
 
 ## Not yet ported (next steps)
 
-DE combinations, interpolation hybrids, dIFS, inside rendering, positional
-lights and light maps, background pictures, depth of field, volumetric
-light, Monte Carlo rendering, animation, more `.m3f` formulas, a
-wgpu/WebGPU backend.
+Interpolation hybrids, the dIFS "mix" combination, inside rendering, light
+maps, background pictures, depth of field, volumetric light, Monte Carlo
+rendering, smooth normals / roughness, more `.m3f` formulas, a wgpu/WebGPU
+backend, finishing single precision GPU hits in double on the CPU.

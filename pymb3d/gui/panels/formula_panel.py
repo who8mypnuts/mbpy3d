@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...core.scene import MAX_SLOTS, FormulaSlot
+from ...core.scene import MAX_SLOTS, DeCombination, FormulaSlot
 from ...formulas import registry
 from ...formulas.catalog import catalog
 from ..scene_model import SceneModel
@@ -173,6 +173,34 @@ class FormulaPanel(QWidget):
         form.addRow(self.julia)
         form.addRow("Julia seed x y z w", jl)
         lay.addWidget(general)
+
+        dc = QGroupBox("DE combination (two hybrid parts)")
+        df = QFormLayout(dc)
+        self.dc_kind = QComboBox()
+        for k, name in enumerate(DeCombination.KINDS):
+            self.dc_kind.addItem(name, k)
+        self.dc_start2 = IntSpin(1, 1, MAX_SLOTS - 1)
+        self.dc_start2.setToolTip("First slot (1 based) of the second part")
+        self.dc_repeat2 = IntSpin(1, 1, MAX_SLOTS - 1)
+        self.dc_iterations2 = IntSpin(12, 1, 100000)
+        self.dc_smooth = DoubleSpin(0.5, 0.0, 1e6, 4, 0.05)
+        df.addRow("combination", self.dc_kind)
+        df.addRow("second part starts at slot", self.dc_start2)
+        df.addRow("second part repeats from slot", self.dc_repeat2)
+        df.addRow("second part iterations", self.dc_iterations2)
+        df.addRow("smoothing distance", self.dc_smooth)
+        lay.addWidget(dc)
+
+        col = QGroupBox("2nd colour choice (orbit trap)")
+        cf = QFormLayout(col)
+        self.color_option = QComboBox()
+        for name in ("orbit trap (min |z|)", "log(r / r old)", "angle xy", "angle xz", "angle yz", "spherical"):
+            self.color_option.addItem(name)
+        self.color_mul = DoubleSpin(1.0, 0.0, 1000.0, 3, 0.1)
+        cf.addRow("mode", self.color_option)
+        cf.addRow("multiplier", self.color_mul)
+        lay.addWidget(col)
+
         self.editors = [SlotEditor(i, model) for i in range(MAX_SLOTS)]
         for e in self.editors:
             lay.addWidget(e)
@@ -191,6 +219,11 @@ class FormulaPanel(QWidget):
         self.julia.toggled.connect(lambda v: self._set("julia", bool(v)))
         for sp in self.julia_c:
             sp.valueChanged.connect(self._julia_changed)
+        self.dc_kind.currentIndexChanged.connect(self._decomb_changed)
+        for w in (self.dc_start2, self.dc_repeat2, self.dc_iterations2, self.dc_smooth):
+            w.valueChanged.connect(self._decomb_changed)
+        self.color_option.currentIndexChanged.connect(lambda i: self._set("color_option", int(i)))
+        self.color_mul.valueChanged.connect(lambda v: self._set("color_mul", float(v)))
         model.replaced.connect(self.load)
         self.load()
 
@@ -205,9 +238,29 @@ class FormulaPanel(QWidget):
         self.julia.setChecked(sc.julia)
         for sp, v in zip(self.julia_c, sc.julia_c):
             sp.set_silently(v)
+        d = sc.decomb
+        self.dc_kind.setCurrentIndex(min(max(d.kind, 0), len(DeCombination.KINDS) - 1))
+        self.dc_start2.set_silently(d.start2 + 1)
+        self.dc_repeat2.set_silently(d.repeat_from2 + 1)
+        self.dc_iterations2.set_silently(d.iterations2)
+        self.dc_smooth.set_silently(d.smooth)
+        self.color_option.setCurrentIndex(min(5, max(0, sc.color_option)))
+        self.color_mul.set_silently(sc.color_mul)
         for e in self.editors:
             e.load()
         self._loading = False
+
+    def _decomb_changed(self, _v=None) -> None:
+        if self._loading:
+            return
+        self.model.snapshot()
+        d = self.model.scene.decomb
+        d.kind = int(self.dc_kind.currentData())
+        d.start2 = int(self.dc_start2.value()) - 1
+        d.repeat_from2 = int(self.dc_repeat2.value()) - 1
+        d.iterations2 = int(self.dc_iterations2.value())
+        d.smooth = float(self.dc_smooth.value())
+        self.model.touch("formulas")
 
     def _set(self, attr: str, value) -> None:
         if self._loading:

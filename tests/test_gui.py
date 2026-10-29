@@ -128,3 +128,53 @@ def test_undo_redo(window):
     assert window.model.scene.iterations == it0
     assert window.model.redo()
     assert window.model.scene.iterations == it0 + 3
+
+
+def test_animation_dialog(window, tmp_path):
+    from pymb3d.gui.animation_dialog import AnimationDialog
+
+    wait_until(lambda: len(window._test_results) >= 1)
+    dlg = AnimationDialog(window.model, CPU, window)
+    dlg.frame_spin.setValue(0)
+    dlg._add()
+    window.model.scene.camera.zoom *= 2
+    dlg.frame_spin.setValue(2)
+    dlg._add()
+    assert dlg.anim.frame_count == 3
+    dlg.width.setValue(24)
+    dlg.height.setValue(16)
+    dlg.out_dir.setText(str(tmp_path))
+    dlg._render()
+    wait_until(lambda: dlg._thread is None, timeout=120)
+    assert sorted(p.name for p in tmp_path.glob("frame_*.png")) == ["frame_00000.png", "frame_00001.png", "frame_00002.png"]
+    dlg.scrub.setValue(1)
+    assert abs(window.model.scene.camera.zoom - dlg.anim.scene_at(1).camera.zoom) < 1e-9
+    dlg.close()
+
+
+def test_render_panel_devices_and_export(window, tmp_path):
+    wait_until(lambda: len(window._test_results) >= 1)
+    assert window.render_panel.final_choice.backend == "cpu"
+    from pymb3d.io import save_scene, load_scene
+
+    p = tmp_path / "x.m3p"
+    save_scene(window.model.scene, p)
+    sc, _ = load_scene(p)
+    assert sc.slots[0].name == window.model.scene.slots[0].name
+
+
+def test_render_dialog_data_round_trip(app, tmp_path):
+    from pymb3d.core.scene import default_scene
+    from pymb3d.gui.render_dialog import RenderDialog
+    from pymb3d.io.gbuffer_file import load_gbuffer, save_gbuffer
+
+    sc = default_scene()
+    sc.width, sc.height = 40, 30
+    sc.camera.z_start, sc.camera.zoom = -2.0, 1.4
+    dlg = RenderDialog(sc, CPU)
+    wait_until(lambda: dlg.result is not None, timeout=120)
+    p = tmp_path / "r.npz"
+    save_gbuffer(p, dlg.result.gbuffer, dlg.result.scene)
+    g, back = load_gbuffer(p)
+    assert g.shape == dlg.result.gbuffer.shape and back.width == 40
+    dlg.close()

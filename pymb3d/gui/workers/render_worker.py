@@ -63,6 +63,11 @@ class RenderWorker(QObject):
                 abort=self._abort,
             )
             info = renderer.backend.info
+            probe = getattr(renderer.backend, "last_probe", None)
+            if probe is not None:
+                result.stats["precision"] = probe.summary
+            elif hasattr(renderer.backend, "last_precision"):
+                result.stats["precision"] = renderer.backend.last_precision
             benchmark.record(info.name, info.backend, info.precision, "|".join(s.name for s in scene.active_slots),
                              scene.width * scene.height, result.seconds, result.compile_seconds, scene.shadows,
                              scene.ao.mode)

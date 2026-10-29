@@ -47,10 +47,8 @@ def color_range(lighting: Lighting) -> tuple[float, float]:
 
 
 def gradient_index(gbuf: np.ndarray, scene: Scene) -> np.ndarray:
-    """MB3D's `si_gradient` (0..32767) from the kernel's colour value."""
-    mcts_m = 32767.0 / (scene.iterations + 1)
-    ci = gbuf[..., PL.G_COLOR].astype(np.float64)
-    return np.clip(32767.0 - ci * mcts_m, 0.0, 32767.0)
+    """MB3D's `si_gradient` (0..32767), computed by the kernel."""
+    return gbuf[..., PL.G_COLOR].astype(np.float64)
 
 
 def palette_lookup(index: np.ndarray, lighting: Lighting) -> tuple[np.ndarray, np.ndarray]:
@@ -77,7 +75,7 @@ def surface_colors(gbuf: np.ndarray, scene: Scene) -> tuple[np.ndarray, np.ndarr
     l = scene.lighting
     s_c_start, s_c_mul = color_range(l)
     if l.color_on_otrap or scene.color_on_otrap:
-        src = np.clip(gbuf[..., PL.G_OTRAP].astype(np.float64) * 4096.0, 0.0, 32767.0)
+        src = gbuf[..., PL.G_OTRAP].astype(np.float64)
     else:
         src = gradient_index(gbuf, scene)
     ir = ((src - s_c_start) * s_c_mul) * 16384.0
@@ -125,6 +123,28 @@ def view_directions(width: int, height: int, fov_y: float) -> np.ndarray:
     vz = np.cos(cafy)[:, None] * np.cos(cafx)[None, :]
     v = np.stack([vx, vy, vz], axis=-1)
     return v / np.linalg.norm(v, axis=-1, keepdims=True)
+
+
+def object_positions(depth: np.ndarray, scene: Scene, full_size: tuple[int, int], origin: tuple[int, int],
+                     size: tuple[int, int]) -> np.ndarray:
+    """World positions (H, W, 3) of the surface points of a G-buffer."""
+    W_full, H_full = full_size
+    ox, oy = origin
+    W, H = size
+    setup = CameraSetup.build(scene.camera, W_full, H_full, scene.raystep_limiter, scene.z_step_div,
+                              scene.vary_de_stop_on_fov)
+    ix = np.arange(W, dtype=np.float64) + ox
+    iy = np.arange(H, dtype=np.float64) + oy
+    cafx = (setup.fovx_off - (ix + 1.0)) * setup.fovx_mul
+    cafy = (iy / H_full - 0.5) * setup.fov_y
+    vx = -np.sin(cafx)[None, :] * np.ones((H, 1))
+    vy = np.sin(cafy)[:, None] * np.ones((1, W))
+    vz = np.cos(cafy)[:, None] * np.cos(cafx)[None, :]
+    v = np.stack([vx, vy, vz], axis=-1)
+    v /= np.linalg.norm(v, axis=-1, keepdims=True)
+    d = v @ setup.vgrads
+    start = setup.ystart + setup.vgrads[0] * ix[None, :, None] + setup.vgrads[1] * iy[:, None, None]
+    return start + d * np.maximum(depth, 0.0)[..., None]
 
 
 def depth_word(depth: np.ndarray, scene: Scene, full_size: tuple[int, int]) -> np.ndarray:
@@ -199,24 +219,38 @@ def shade(gbuf: np.ndarray, scene: Scene, opts: ShadeOptions | None = None) -> n
     li_dif = np.zeros((H, W, 3))
     li_spe = np.zeros((H, W, 3))
     li_amb = np.zeros((H, W, 3))
-    ndotv = np.sum(n_view * view, axis=-1, keepdims=True)
-    refl = view - n_view * (2.0 * ndotv)
+    # lighting in world space: view direction and normal per pixel
+    view_world = view @ unit
+    ndotv = np.sum(n_world * view_world, axis=-1, keepdims=True)
+    refl = view_world - n_world * (2.0 * ndotv)
+    obj_world = None
     for i, light in enumerate(l.lights[: PL.MAX_LIGHTS]):
         if not light.enabled:
             continue
-        ln = light_vectors_view(light, vg)
         col = np.asarray(light.color, dtype=np.float64) * 255.0 * light.amplitude
-        dotp = n_view @ ln
-        d = diffuse_function(light.diff_func & 3, dotp)
+        if light.positional:
+            if obj_world is None:
+                obj_world = object_positions(depth, scene, (full_w, full_h), (ox, oy), (W, H))
+            lv = np.asarray(light.position, dtype=np.float64) - obj_world
+            d2 = np.sum(lv * lv, axis=-1, keepdims=True)
+            ln = lv / np.sqrt(np.maximum(d2, 1e-30))
+            att = (1.3 / (d2[..., 0] + 0.01))
+            dotp = np.sum(n_world * ln, axis=-1)
+            ds = np.sum(refl * ln, axis=-1)
+        else:
+            ln = light_vectors_view(light, vg) @ unit
+            att = 1.0
+            dotp = n_world @ ln
+            ds = refl @ ln
+        d = diffuse_function(light.diff_func & 3, dotp) * att
         li_amb += col * d[..., None]
         sh = gbuf[..., PL.G_SHADOW + i].astype(np.float64) if opts.use_shadows else np.ones((H, W))
         li_dif += col * (d * sh * d_amb_sh)[..., None]
         pf = float(2 << (light.spec_func & 7))
-        ds = refl @ ln
         pos = ds > 0.0
         t2 = s_spec
         li_amb += col * (t2 / pf)
-        spec = np.where(pos, np.maximum(ds, 0.0) ** pf, 0.0) * t2 * sh * d_amb_sh
+        spec = np.where(pos, np.maximum(ds, 0.0) ** pf, 0.0) * t2 * sh * d_amb_sh * att
         li_spe += col * spec[..., None]
 
     amb_mul = l.ambient_mul

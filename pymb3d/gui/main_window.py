@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (
 
 from ..backends.detect import DeviceChoice, available_devices, choose
 from ..core.scene import Scene, default_scene
-from ..io import load_scene, save_scene, scene_from_clipboard_text
-from ..io.m3p import raw_to_text
+from ..io import load_lighting, load_scene, save_lighting, save_scene, scene_from_clipboard_text
+from ..io.m3p_write import to_text
 from .panels.camera_panel import CameraPanel
 from .panels.formula_panel import FormulaPanel
 from .panels.info_panel import InfoPanel
@@ -112,17 +112,23 @@ class MainWindow(QMainWindow):
         act("Open...", self._open, "Ctrl+O")
         act("Save", self._save, "Ctrl+S")
         act("Save as...", self._save_as, "Ctrl+Shift+S", toolbar=False)
+        act("Export Mandelbulb3D parameters (.m3p)...", self._export_m3p, toolbar=False)
         act("Save preview image...", self._save_preview, toolbar=False)
+        menu_file.addSeparator()
+        act("Load lighting preset...", self._load_lighting, toolbar=False)
+        act("Save lighting preset...", self._save_lighting, toolbar=False)
         menu_file.addSeparator()
         act("Quit", self.close, "Ctrl+Q", toolbar=False)
         act("Undo", self.model.undo, "Ctrl+Z", menu_edit, toolbar=False)
         act("Redo", self.model.redo, "Ctrl+Y", menu_edit, toolbar=False)
         menu_edit.addSeparator()
         act("Copy parameters (MB3D text)", self._copy_params, "Ctrl+C", menu_edit, toolbar=False)
+        act("Copy scene as JSON", self._copy_json, toolbar=False, menu=menu_edit)
         act("Paste parameters", self._paste_params, "Ctrl+V", menu_edit)
         tb.addSeparator()
         act("Refresh preview", self._refresh, "F5", menu_render)
         act("Final render...", self._final_render, "Ctrl+R", menu_render)
+        act("Animation...", self._animation, "Ctrl+A", menu_render)
 
     def _connect_navigation(self) -> None:
         p = self.preview
@@ -291,8 +297,47 @@ class MainWindow(QMainWindow):
             save_image(path, res.image, res.scene)
 
     def _copy_params(self) -> None:
+        QGuiApplication.clipboard().setText(to_text(self.model.scene, self.model.scene.title or "pymb3d"))
+        self._status("Mandelbulb3D text parameters copied to the clipboard")
+
+    def _copy_json(self) -> None:
         QGuiApplication.clipboard().setText(json.dumps(self.model.scene.to_dict(), indent=1))
         self._status("scene JSON copied to the clipboard")
+
+    def _export_m3p(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export Mandelbulb3D parameters", "scene.m3p",
+                                              "Mandelbulb3D parameters (*.m3p)")
+        if path:
+            if not path.lower().endswith(".m3p"):
+                path += ".m3p"
+            save_scene(self.model.scene, path)
+            self._status(f"exported {path}")
+
+    def _load_lighting(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Load lighting preset", "", "Lighting (*.json *.m3l)")
+        if path:
+            try:
+                self.model.snapshot()
+                self.model.scene.lighting = load_lighting(path)
+            except Exception as e:  # noqa: BLE001
+                QMessageBox.critical(self, "Load failed", str(e))
+                return
+            self.light_panel.load()
+            self.model.touch("lighting")
+
+    def _save_lighting(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Save lighting preset", "lighting.json", "Lighting (*.json)")
+        if path:
+            save_lighting(self.model.scene.lighting, path)
+
+    def _animation(self) -> None:
+        from .animation_dialog import AnimationDialog
+
+        dlg = AnimationDialog(self.model, self.render_panel.final_choice, self)
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
+        dlg.show()
+        self._dialogs = getattr(self, "_dialogs", [])
+        self._dialogs.append(dlg)
 
     def _paste_params(self) -> None:
         text = QGuiApplication.clipboard().text()
@@ -311,7 +356,7 @@ class MainWindow(QMainWindow):
         self.controller.request(self.model.scene)
 
     def _final_render(self) -> None:
-        dlg = RenderDialog(self.model.scene, self.render_panel.final_choice, self)
+        dlg = RenderDialog(self.model.scene, self.render_panel.final_choice, self, model=self.model)
         dlg.setWindowModality(Qt.WindowModality.NonModal)
         dlg.show()
         self._dialogs = getattr(self, "_dialogs", [])

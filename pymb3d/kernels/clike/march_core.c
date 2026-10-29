@@ -8,87 +8,19 @@
  * structure function by function.
  *
  * Pieces that precede this file: the prelude of the target, the #defines
- * of core/params.py, the generated formulas with run_slot().
+ * of core/params.py, the generated formulas and the generated loops
+ * iterate / iterate_p2 (the alternating hybrid of the first / second part)
+ * and difs_orbit / difs_orbit_p2 (the dIFS loops), see kernels/loopgen.py.
  */
 
-/* ------------------------------------------------------------------ orbit */
-
-Orbit orbit_init(FN_ARGS real3 pos) {
-    Orbit o;
-    State s;
-    real4 p4;
-    s.z = pos;
-    s.w = 0.0;
-    if (PARAM(P_FOUR_D) > 0.5) {
-        /* the 4D rotation of the start point (Rotate4Dex) */
-        p4.x = pos.x * PARAM(P_ROT4D + 0) + pos.y * PARAM(P_ROT4D + 1) + pos.z * PARAM(P_ROT4D + 2);
-        p4.y = pos.x * PARAM(P_ROT4D + 4) + pos.y * PARAM(P_ROT4D + 5) + pos.z * PARAM(P_ROT4D + 6);
-        p4.z = pos.x * PARAM(P_ROT4D + 8) + pos.y * PARAM(P_ROT4D + 9) + pos.z * PARAM(P_ROT4D + 10);
-        p4.w = pos.x * PARAM(P_ROT4D + 12) + pos.y * PARAM(P_ROT4D + 13) + pos.z * PARAM(P_ROT4D + 14);
-        s.z = V3(p4.x, p4.y, p4.z);
-        s.w = p4.w;
-    }
-    if (PARAM(P_JULIA) > 0.5) {
-        s.c = V3(PARAM(P_JULIA_C), PARAM(P_JULIA_C + 1), PARAM(P_JULIA_C + 2));
-        s.cw = PARAM(P_JULIA_C + 3);
-    } else {
-        s.c = s.z;
-        s.cw = s.w;
-    }
-    s.dr = 1.0;
-    s.r2 = dot(s.z, s.z) + s.w * s.w;
-    o.s = s;
-    o.rold = s.r2;
-    o.otrap = s.r2;
-    o.it = 0;
-    o.slot = 0;
-    return o;
-}
-
-/* The alternating hybrid loop (doHybridPas): slot n runs its iteration
- * count, then the next slot, after the last one the loop continues from
- * repeat_from.  Uncounted slots (transforms) do not count as iterations. */
-Orbit iterate(FN_ARGS real3 pos, int max_it, real rstop2) {
-    Orbit o = orbit_init(FN_PASS pos);
-    int nslots = TO_INT(PARAM(P_NSLOTS));
-    int repeat_from = TO_INT(PARAM(P_REPEAT_FROM));
-    bool four_d = PARAM(P_FOUR_D) > 0.5;
-    int n = 0;
-    int btmp = TO_INT(PARAM(P_SLOTS + SLOT_STRIDE * 0));
-    int guard;
-    int total = 0;
-    if (nslots < 1) return o;
-    while (total < 100000) {
-        total += 1;
-        o.rold = o.s.r2;
-        guard = 0;
-        while (btmp <= 0) {
-            n += 1;
-            if (n >= nslots) n = repeat_from;
-            btmp = TO_INT(PARAM(P_SLOTS + SLOT_STRIDE * n));
-            guard += 1;
-            if (guard > 64) return o;
-        }
-        o.s = run_slot(FN_PASS n, o.s);
-        o.slot = n;
-        btmp -= 1;
-        if (PARAM(P_SLOTS + SLOT_STRIDE * n + 1) > 0.5) continue; /* uncounted */
-        o.it += 1;
-        o.s.r2 = dot(o.s.z, o.s.z) + (four_d ? o.s.w * o.s.w : 0.0);
-        if (o.s.r2 < o.otrap) o.otrap = o.s.r2;
-        if (o.it >= max_it || o.s.r2 > rstop2) return o;
-        if (isnan(o.s.r2)) return o;
-    }
-    return o;
-}
-
 /* CalcSmoothIterations */
-real smooth_iterations(FN_ARGS Orbit o) {
+real smooth_iterations(FN_ARGS Orbit o, int mode) {
     real r2 = o.s.r2;
     real fhln = PARAM(P_SLOTS + SLOT_STRIDE * o.slot + 2);
     real ln_rstop = PARAM(P_LN_RSTOP);
     real d;
     real e;
+    if (mode == 3) return TO_REAL(o.it);
     if (r2 <= 1.0) return TO_REAL(o.it);
     if (o.rold < 1.0) {
         d = log(0.5 * log(r2)) * fhln;
@@ -103,46 +35,118 @@ real smooth_iterations(FN_ARGS Orbit o) {
 
 /* Numerical gradient DE (CalcDEnoADE): the change of |z|^2 after the same
  * number of iterations from three offset points. */
-real de_numeric(FN_ARGS real3 pos, Orbit o) {
+real de_numeric(FN_ARGS real3 pos, Orbit o, int part, real de_scale) {
     real r2_0 = o.s.r2;
     real off = PARAM(P_DE_OFFSET_PX) * PARAM(P_STEP_WIDTH);
     real g = 0.0;
     real d;
     Orbit ok;
     if (r2_0 < 1e-30) return 0.0;
-    ok = iterate(FN_PASS pos + V3(off, 0.0, 0.0), o.it, 1e30);
+    ok = (part == 0) ? iterate(FN_PASS pos + V3(off, 0.0, 0.0), o.it, 1e30)
+                     : iterate_p2(FN_PASS pos + V3(off, 0.0, 0.0), o.it, 1e30);
     d = r2_0 - ok.s.r2;
     g += d * d;
-    ok = iterate(FN_PASS pos + V3(0.0, off, 0.0), o.it, 1e30);
+    ok = (part == 0) ? iterate(FN_PASS pos + V3(0.0, off, 0.0), o.it, 1e30)
+                     : iterate_p2(FN_PASS pos + V3(0.0, off, 0.0), o.it, 1e30);
     d = r2_0 - ok.s.r2;
     g += d * d;
-    ok = iterate(FN_PASS pos + V3(0.0, 0.0, off), o.it, 1e30);
+    ok = (part == 0) ? iterate(FN_PASS pos + V3(0.0, 0.0, off), o.it, 1e30)
+                     : iterate_p2(FN_PASS pos + V3(0.0, 0.0, off), o.it, 1e30);
     d = r2_0 - ok.s.r2;
     g += d * d;
-    return r2_0 * log(r2_0) * PARAM(P_DE_SCALE) * PARAM(P_DE_OFFSET_PX) / (sqrt(g) + PARAM(P_DE_OFFSET_PX) * 0.06);
+    return r2_0 * log(r2_0) * de_scale * PARAM(P_DE_OFFSET_PX) / (sqrt(g) + PARAM(P_DE_OFFSET_PX) * 0.06);
 }
 
-/* The distance estimate at pos in pixel units, with the orbit it needed. */
-DeResult calc_de(FN_ARGS real3 pos, real de_stop_here) {
+/* The distance estimate of one hybrid part at pos, in pixel units. */
+DeResult de_part(FN_ARGS real3 pos, real ds, int part) {
     DeResult r;
-    int max_it = TO_INT(PARAM(P_MAX_IT));
-    int mode = TO_INT(PARAM(P_DE_MODE));
+    int max_it = TO_INT((part == 0) ? PARAM(P_MAX_IT) : PARAM(P_MAX_IT2));
+    int inside_it = TO_INT((part == 0) ? PARAM(P_INSIDE_IT) : PARAM(P_INSIDE_IT2));
+    int mode = TO_INT((part == 0) ? PARAM(P_DE_MODE) : PARAM(P_DE_MODE2));
+    real de_scale = (part == 0) ? PARAM(P_DE_SCALE) : PARAM(P_DE_SCALE2);
+    real sw = PARAM(P_STEP_WIDTH);
     real de;
     real rr;
-    r.o = iterate(FN_PASS pos, max_it, PARAM(P_RSTOP2));
-    if (r.o.it >= max_it) {
-        de = 0.0;
-    } else if (mode == 1) {
-        de = sqrt(r.o.s.r2) / fabs(r.o.s.dr) * PARAM(P_DE_SCALE) / PARAM(P_STEP_WIDTH);
-    } else if (mode == 2) {
-        rr = sqrt(r.o.s.r2);
-        de = 0.5 * log(r.o.s.r2) * rr / fabs(r.o.s.dr) * PARAM(P_DE_SCALE) / PARAM(P_STEP_WIDTH);
+    if (mode == 3) {
+        r.o = (part == 0) ? difs_orbit(FN_PASS pos, max_it, ds * sw * 1.03, false)
+                          : difs_orbit_p2(FN_PASS pos, max_it, ds * sw * 1.03, false);
+        de = r.o.s.r2 * de_scale / sw;
     } else {
-        de = de_numeric(FN_PASS pos, r.o);
+        r.o = (part == 0) ? iterate(FN_PASS pos, max_it, PARAM(P_RSTOP2))
+                          : iterate_p2(FN_PASS pos, max_it, PARAM(P_RSTOP2));
+        if (r.o.it >= inside_it) {
+            de = 0.0;
+        } else if (mode == 1) {
+            de = sqrt(r.o.s.r2) / fabs(r.o.s.dr) * de_scale / sw;
+        } else if (mode == 2) {
+            rr = sqrt(r.o.s.r2);
+            de = 0.5 * log(r.o.s.r2) * rr / fabs(r.o.s.dr) * de_scale / sw;
+        } else {
+            de = de_numeric(FN_PASS pos, r.o, part, de_scale);
+        }
     }
-    if (!(de >= de_stop_here * 0.25)) de = de_stop_here * 0.25; /* also NaN */
+    if (!(de >= ds * 0.25)) de = ds * 0.25; /* also NaN */
     r.de = de;
+    /* the smooth iteration count is only needed here by the smooth minima */
+    r.sit = (TO_INT(PARAM(P_DECOMB_KIND)) >= 4) ? smooth_iterations(FN_PASS r.o, mode) : 0.0;
+    r.inside = r.o.it >= inside_it;
     return r;
+}
+
+/* CalcDEfull: the first part, or the combination of two hybrid parts. */
+DeResult calc_de(FN_ARGS real3 pos, real ds) {
+    DeResult a = de_part(FN_PASS pos, ds, 0);
+    DeResult b;
+    int kind = TO_INT(PARAM(P_DECOMB_KIND));
+    real sm;
+    real res;
+    real rst;
+    real rd1;
+    real d2;
+    real w;
+    real r2;
+    real f;
+    if (kind == 0) return a;
+    b = de_part(FN_PASS pos, ds, 1);
+    rst = b.de;
+    if (kind == 3) {
+        /* the second part inverted */
+        rst = ds * 4.0 - rst * 3.0;
+        b.inside = false;
+    }
+    if (kind == 1) {
+        return (rst < a.de) ? b : a;
+    }
+    if (kind == 2 || kind == 3) {
+        if (rst > a.de) {
+            b.de = rst;
+            return b;
+        }
+        return a;
+    }
+    /* smooth minima (4, 5): the colours are blended by the distances */
+    sm = PARAM(P_DECOMB_SMOOTH);
+    res = a.de;
+    if (kind == 4) {
+        res = fmin(rst - fmax(sm - a.de, 0.0), a.de - fmax(sm - rst, 0.0));
+    } else {
+        rd1 = fmax(sm - a.de - ds, 0.0);
+        d2 = fmax(sm - rst - ds, 0.0);
+        res = fmin(rst - rd1 * (sm - d2) / sm, a.de - d2 * (sm - rd1) / sm);
+    }
+    r2 = fabs(rst);
+    w = fabs(res);
+    f = 1.0 / (w + r2 + 1e-10);
+    if (rst < a.de) {
+        b.sit = (b.sit * w + a.sit * r2) * f;
+        b.o.otrap = (b.o.otrap * w + a.o.otrap * r2) * f;
+        b.de = res;
+        return b;
+    }
+    a.sit = (b.sit * w + a.sit * r2) * f;
+    a.o.otrap = (b.o.otrap * w + a.o.otrap * r2) * f;
+    a.de = res;
+    return a;
 }
 
 /* --------------------------------------------------------------- camera */
@@ -232,12 +236,12 @@ real de_ambient_occlusion(FN_ARGS real3 pos, real3 n, real t) {
 
 /* ---------------------------------------------------------------- shadow */
 
-/* Soft shadow factor (1 = lit) towards a light direction (world space). */
-real shadow_factor(FN_ARGS real3 pos, real3 n, real3 ldir, real t) {
+/* Soft shadow factor (1 = lit) towards a light direction (world space),
+ * at most maxlen pixel units far. */
+real shadow_factor(FN_ARGS real3 pos, real3 n, real3 ldir, real t, real maxlen) {
     real sw = PARAM(P_STEP_WIDTH);
     real ds0 = de_stop_at(FN_PASS t);
     real tt = ds0 * 2.0;          /* pixel units along the light ray */
-    real maxlen = PARAM(P_ZEND);
     real res = 1.0;
     real k = PARAM(P_SHADOW_SOFTNESS);
     real de;
@@ -245,7 +249,7 @@ real shadow_factor(FN_ARGS real3 pos, real3 n, real3 ldir, real t) {
     real step;
     int i;
     real3 p0 = pos + n * (ds0 * sw * 1.5);
-    for (i = 0; i < 400; i += 1) {
+    for (i = 0; i < 300; i += 1) {
         if (tt > maxlen) break;
         ds = de_stop_at(FN_PASS t + tt);
         de = calc_de(FN_PASS p0 + ldir * (tt * sw), ds).de;
@@ -264,19 +268,16 @@ Hit bin_search(FN_ARGS Hit h, real3 dir, real last_step) {
     int steps = TO_INT(PARAM(P_BIN_SEARCH));
     real dt1 = last_step * -0.5;
     real ds;
-    DeResult r;
     int i;
     for (i = 0; i < steps; i += 1) {
         h.t += dt1;
         h.pos += dir * dt1;
         ds = de_stop_at(FN_PASS h.t);
-        r = calc_de(FN_PASS h.pos, ds);
-        h.de = r.de;
-        h.o = r.o;
-        if (fabs(h.de - ds) <= 0.001) break;
-        if (h.o.it >= TO_INT(PARAM(P_MAX_IT))) {
+        h.r = calc_de(FN_PASS h.pos, ds);
+        if (fabs(h.r.de - ds) <= 0.001) break;
+        if (h.r.inside) {
             dt1 = -fabs(dt1);
-        } else if (h.de < ds) {
+        } else if (h.r.de < ds) {
             dt1 = fabs(dt1) * -0.55;
         } else {
             dt1 = fabs(dt1) * 0.55;
@@ -292,7 +293,6 @@ Hit march(FN_ARGS real px, real py) {
     real zsd = PARAM(P_Z_STEP_DIV);
     real mh04zsd = PARAM(P_MH04ZSD);
     real ms_de_sub = PARAM(P_MS_DE_SUB);
-    int max_it = TO_INT(PARAM(P_MAX_IT));
     int min_it = TO_INT(PARAM(P_MIN_IT));
     real ds;
     real last_de;
@@ -302,10 +302,9 @@ Hit march(FN_ARGS real px, real py) {
     real rsf_mul = 1.0;
     real steps = 0.0;
     bool first_step = PARAM(P_FIRST_STEP_RANDOM) > 0.5;
-    bool at_cut = false;
-    DeResult r;
     int guard;
     h.hit = false;
+    h.at_start = false;
     h.t = 0.0;
     h.steps = 0.0;
     h.pos = ray.origin;
@@ -315,36 +314,30 @@ Hit march(FN_ARGS real px, real py) {
         if (d > 0.0) {
             h.t = d;
             h.pos = ray.origin + ray.dir * d;
-            at_cut = true;
         }
     }
     ds = de_stop_at(FN_PASS h.t);
-    r = calc_de(FN_PASS h.pos, ds);
-    h.de = r.de;
-    h.o = r.o;
-    if (h.o.it >= max_it || h.de < ds) {
+    h.r = calc_de(FN_PASS h.pos, ds);
+    if (h.r.inside || h.r.de < ds) {
         /* inside the set at the start plane / cutting plane */
         h.hit = true;
         h.at_start = true;
         return h;
     }
-    h.at_start = false;
-    last_step = h.de * zsd;
+    last_step = h.r.de * zsd;
     for (guard = 0; guard < 200000; guard += 1) {
-        if (h.o.it >= max_it) {
+        if (h.r.inside) {
             /* overshot into the set: half a step back */
             d = -0.5 * last_step;
             h.t += d;
             h.pos += ray.dir * d;
             ds = de_stop_at(FN_PASS h.t);
-            r = calc_de(FN_PASS h.pos, ds);
-            h.de = r.de;
-            h.o = r.o;
+            h.r = calc_de(FN_PASS h.pos, ds);
             last_step = -d;
         }
-        if (h.o.it < min_it || (h.o.it < max_it && h.de >= ds)) {
-            last_de = h.de;
-            d = fmax(0.11, (h.de - ms_de_sub * ds) * zsd * rsf_mul);
+        if (h.r.o.it < min_it || (!h.r.inside && h.r.de >= ds)) {
+            last_de = h.r.de;
+            d = fmax(0.11, (h.r.de - ms_de_sub * ds) * zsd * rsf_mul);
             s1 = fmax(ds, 0.4) * mh04zsd;
             if (s1 < d) {
                 steps += s1 / d;
@@ -364,18 +357,16 @@ Hit march(FN_ARGS real px, real py) {
             last_step = d;
             h.pos += ray.dir * d;
             ds = de_stop_at(FN_PASS h.t);
-            r = calc_de(FN_PASS h.pos, ds);
-            h.de = r.de;
-            h.o = r.o;
-            if (h.de > last_de + last_step) h.de = last_de + last_step;
-            if (last_de > h.de + 1e-30) {
-                rsf_mul = fmin(1.0, fmax(0.5, last_step / (last_de - h.de)));
+            h.r = calc_de(FN_PASS h.pos, ds);
+            if (h.r.de > last_de + last_step) h.r.de = last_de + last_step;
+            if (last_de > h.r.de + 1e-30) {
+                rsf_mul = fmin(1.0, fmax(0.5, last_step / (last_de - h.r.de)));
             } else {
                 rsf_mul = 1.0;
             }
         } else {
             h.hit = true;
-            if (TO_INT(PARAM(P_BIN_SEARCH)) > 0 && (h.o.it < max_it || h.de < ds)) {
+            if (TO_INT(PARAM(P_BIN_SEARCH)) > 0 && (!h.r.inside || h.r.de < ds)) {
                 h = bin_search(FN_PASS h, ray.dir, last_step);
             }
             break;
@@ -385,16 +376,40 @@ Hit march(FN_ARGS real px, real py) {
     return h;
 }
 
+/* MB3D's 15 bit clip */
+real clip15(real v) {
+    return clamp(v, 0.0, 32767.0);
+}
+
+/* RMdoColor: the orbit trap colour value (the 2nd colour choice). */
+real orbit_trap_value(FN_ARGS Orbit o, real ds, int mode) {
+    int opt = TO_INT(PARAM(P_COLOR_OPTION));
+    real3 z = o.s.z;
+    real3 c = o.s.c;
+    real r;
+    if (mode == 3) return clip15(o.otrap * 4096.0);
+    if (opt == 1) return clip15(log(o.s.r2 / (o.rold + 1.0)) * PARAM(P_COLOR_MUL));
+    if (opt == 2) return clip15((atan2(z.y - c.y, z.x - c.x) + PI_) * 5200.0);
+    if (opt == 3) return clip15((atan2(z.z - c.z, z.x - c.x) + PI_) * 5200.0);
+    if (opt == 4) return clip15((atan2(z.z - c.z, z.y - c.y) + PI_) * 5200.0);
+    if (opt == 5) return clip15((atan2(z.x, z.y) + PI_) * 5215.0);
+    return clip15(o.otrap * 4096.0);
+}
+
 /* The whole pixel: march, normal, colour values, AO and shadows. */
 Pixel shade_pixel(FN_ARGS real px, real py) {
     Pixel g;
     Hit h = march(FN_PASS px, py);
     real ds;
-    real sit;
+    real nn;
+    real v;
+    real r;
     real3 n;
     real3 ldir;
+    real maxlen;
     int i;
     int nl;
+    int mode = TO_INT(PARAM(P_DE_MODE));
     g.depth = -1.0;
     g.normal = V3(0.0, 0.0, -1.0);
     g.color = 0.0;
@@ -407,19 +422,23 @@ Pixel shade_pixel(FN_ARGS real px, real py) {
     if (!h.hit) return g;
     g.depth = h.t;
     ds = de_stop_at(FN_PASS h.t);
-    sit = smooth_iterations(FN_PASS h.o);
-    g.iter = TO_REAL(h.o.it);
-    g.de = h.de;
-    g.otrap = h.o.otrap;
-    if (h.o.it < TO_INT(PARAM(P_MAX_IT)) || h.de < ds) {
-        g.color = sit + PARAM(P_COL_PLUS) + PARAM(P_COL_VAR) * log(fmax(PARAM(P_DE_STOP), ds) * PARAM(P_STEP_WIDTH));
+    nn = (TO_INT(PARAM(P_DECOMB_KIND)) >= 4) ? h.r.sit : smooth_iterations(FN_PASS h.r.o, mode);
+    g.iter = TO_REAL(h.r.o.it);
+    g.de = h.r.de;
+    g.otrap = orbit_trap_value(FN_PASS h.r.o, ds, mode);
+    if (!h.r.inside || h.r.de < ds) {
+        v = 32767.0 - (nn + PARAM(P_COL_PLUS) + PARAM(P_COL_VAR) * log(fmax(PARAM(P_DE_STOP), ds) * PARAM(P_STEP_WIDTH))) * PARAM(P_MCTS_M);
     } else {
-        g.color = sit;
+        v = 32767.0 - nn * PARAM(P_MCTS_M);
     }
-    if (h.at_start) {
-        /* the start plane / cutting plane: normal against the view */
+    if (TO_INT(PARAM(P_COLOR_OPTION)) == 5) {
+        r = sqrt(dot(h.r.o.s.z, h.r.o.s.z) + 1e-100);
+        v = (PI_ + asin(clamp(h.r.o.s.z.z / r, -1.0, 1.0)) * 2.0) * 5215.0;
+    }
+    g.color = clip15(v);
+    if (h.at_start && PARAM(P_CUT_OPTIONS) < 0.5) {
+        /* the start plane: normal against the view */
         n = -normalize(pixel_ray(FN_PASS px, py).dir);
-        if (PARAM(P_CUT_OPTIONS) > 0.5) n = surface_normal(FN_PASS h.pos, h.t);
     } else {
         n = surface_normal(FN_PASS h.pos, h.t);
     }
@@ -430,8 +449,15 @@ Pixel shade_pixel(FN_ARGS real px, real py) {
         for (i = 0; i < nl; i += 1) {
             if (PARAM(P_LIGHT_FLAGS + i) < 0.5) continue;
             ldir = V3(PARAM(P_LIGHT_DIRS + 3 * i), PARAM(P_LIGHT_DIRS + 3 * i + 1), PARAM(P_LIGHT_DIRS + 3 * i + 2));
+            maxlen = PARAM(P_ZEND);
+            if (PARAM(P_LIGHT_FLAGS + i) > 1.5) {
+                /* positional light: towards its position, up to it */
+                ldir = ldir - h.pos;
+                maxlen = length(ldir) / PARAM(P_STEP_WIDTH);
+                ldir = normalize(ldir);
+            }
             if (dot(ldir, n) <= 0.0) continue;
-            g.shadow[i] = shadow_factor(FN_PASS h.pos, n, ldir, h.t);
+            g.shadow[i] = shadow_factor(FN_PASS h.pos, n, ldir, h.t, maxlen);
         }
     }
     return g;

@@ -89,7 +89,12 @@ class PreviewController(QObject):
     # ------------------------------------------------------------- internals
     def _sized(self, scene: Scene, factor: int = 1) -> Scene:
         w, h = self.preview_size(scene)
-        return scene.resized(max(8, w // factor), max(8, h // factor))
+        sc = scene.resized(max(8, w // factor), max(8, h // factor))
+        if factor > 1:
+            # the coarse pass while interacting: no shadows, no occlusion
+            sc.shadows = False
+            sc.ao.mode = "none"
+        return sc
 
     @Slot()
     def _flush(self) -> None:

@@ -50,6 +50,34 @@ class AOSettings:
 
 
 @dataclass
+class DeCombination:
+    """Two hybrid parts combined by their distance estimates (`DE
+    combination`): slots ``0..start2-1`` form part 1, ``start2..`` part 2."""
+
+    #: 0 off, 1 minimum, 2 maximum, 3 inverted maximum, 4 smooth minimum, 5 smooth minimum 2
+    kind: int = 0
+    #: first slot of the second part
+    start2: int = 1
+    #: repeat slot of the second part (index into the scene slots)
+    repeat_from2: int = 1
+    #: max iterations of the second part
+    iterations2: int = 12
+    #: smoothing distance (world units) of the smooth minima
+    smooth: float = 0.5
+
+    KINDS = ("off", "minimum", "maximum", "inverted maximum", "smooth minimum", "smooth minimum 2")
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "start2": self.start2, "repeat_from2": self.repeat_from2,
+                "iterations2": self.iterations2, "smooth": self.smooth}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "DeCombination":
+        return cls(int(d.get("kind", 0)), int(d.get("start2", 1)), int(d.get("repeat_from2", 1)),
+                   int(d.get("iterations2", 12)), float(d.get("smooth", 0.5)))
+
+
+@dataclass
 class Scene:
     width: int = 640
     height: int = 480
@@ -83,6 +111,10 @@ class Scene:
     cut_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     #: colour from the orbit trap (min |z|) instead of the smooth iteration count
     color_on_otrap: bool = False
+    #: MB3D's 2nd colour choice: 0 orbit trap, 1 log(r/rold), 2..4 angles, 5 spherical
+    color_option: int = 0
+    color_mul: float = 1.0
+    decomb: DeCombination = field(default_factory=DeCombination)
     ao: AOSettings = field(default_factory=AOSettings)
     shadows: bool = False
     lighting: Lighting = field(default_factory=Lighting)
@@ -131,6 +163,9 @@ class Scene:
             "cut_options": self.cut_options,
             "cut_pos": list(self.cut_pos),
             "color_on_otrap": self.color_on_otrap,
+            "color_option": self.color_option,
+            "color_mul": self.color_mul,
+            "decomb": self.decomb.to_dict(),
             "ao": {"mode": self.ao.mode, "strength": self.ao.strength, "radius": self.ao.radius, "samples": self.ao.samples},
             "shadows": self.shadows,
             "lighting": self.lighting.to_dict(),
@@ -144,10 +179,10 @@ class Scene:
         s.height = int(d.get("height", s.height))
         s.camera = Camera.from_dict(d.get("camera", {}))
         s.slots = [FormulaSlot.from_dict(x) for x in d.get("slots", [])] or s.slots
-        for key in ("repeat_from", "iterations", "min_iterations", "bin_search_steps", "cut_options"):
+        for key in ("repeat_from", "iterations", "min_iterations", "bin_search_steps", "cut_options", "color_option"):
             if key in d:
                 setattr(s, key, int(d[key]))
-        for key in ("de_stop", "z_step_div", "raystep_limiter"):
+        for key in ("de_stop", "z_step_div", "raystep_limiter", "color_mul"):
             if key in d:
                 setattr(s, key, float(d[key]))
         for key in ("vary_de_stop_on_fov", "first_step_random", "analytic_de", "julia", "color_on_otrap", "shadows"):
@@ -161,6 +196,7 @@ class Scene:
         s.ao = AOSettings(str(ao.get("mode", "ssao")), float(ao.get("strength", 1.0)), float(ao.get("radius", 32.0)),
                           int(ao.get("samples", 5)))
         s.lighting = Lighting.from_dict(d.get("lighting", {}))
+        s.decomb = DeCombination.from_dict(d.get("decomb", {}))
         return s
 
 

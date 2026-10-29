@@ -84,6 +84,10 @@ class Backend(ABC):
     def band_rows(self, width: int) -> int:
         return 16
 
+    #: seconds a band should take (0 = fixed band size); GPU backends keep
+    #: launches short so that the display driver stays responsive
+    band_target_seconds: float = 0.0
+
     def render(self, program: Program, P: np.ndarray, width: int, height: int,
                progress: ProgressFn | None = None, abort: threading.Event | None = None,
                out: np.ndarray | None = None) -> np.ndarray:
@@ -99,10 +103,16 @@ class Backend(ABC):
             if abort.is_set():
                 raise RenderCancelled()
             rows = min(band, height - y)
+            t0 = time.perf_counter()
             self._render_band(compiled, P, y, rows, out, abort)
+            dt = time.perf_counter() - t0
             y += rows
             if progress:
                 progress(y - rows, rows, y, height)
+            if self.band_target_seconds > 0 and dt > 0:
+                # adapt the band to the measured speed (bounded growth)
+                want = rows * self.band_target_seconds / dt
+                band = int(max(1, min(want, rows * 4, 4096)))
         return out
 
     def close(self) -> None:

@@ -244,7 +244,7 @@ __all__ = [
     "vec3", "real", "State", "Params", "Param", "FormulaSpec", "formula", "helper",
     "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "exp", "log",
     "pow", "fabs", "floor", "ceil", "fract", "mod", "sign", "fmin", "fmax", "clamp", "mix", "sqr",
-    "length", "dot", "cross", "normalize", "FUNCTIONS", "TINY", "PI", "TWO_PI",
+    "length", "dot", "cross", "normalize", "FUNCTIONS", "TINY", "PI", "TWO_PI", "DIFS_MODES",
 ]
 
 
@@ -256,20 +256,32 @@ class State:
     w   4th component for 4D formulas (real)
     c   the constant added each iteration: the pixel position or the Julia seed
     cw  4th component of the constant
-    dr  running derivative for the analytic distance estimate (starts at 1)
+    dr  running derivative for the analytic distance estimate (starts at 1);
+        for dIFS formulas the accumulated scale
     r2  |z|^2 after the previous counted iteration (read only)
+    de  dIFS shapes: the distance to the shape (written by the formula)
+    trap dIFS shapes: the orbit trap / colour value
+    aux dIFS: the absolute DE stop (read only)
+    vary a free scalar kept over the iterations (0 at the start of an orbit;
+        MB3D's "vary scale" of formulas whose scale changes per iteration)
     """
 
-    __slots__ = ("z", "w", "c", "cw", "dr", "r2")
-    FIELD_TYPES = {"z": "vec3", "w": "real", "c": "vec3", "cw": "real", "dr": "real", "r2": "real"}
+    __slots__ = ("z", "w", "c", "cw", "dr", "r2", "de", "trap", "aux", "vary")
+    FIELD_TYPES = {"z": "vec3", "w": "real", "c": "vec3", "cw": "real", "dr": "real", "r2": "real",
+                   "de": "real", "trap": "real", "aux": "real", "vary": "real"}
 
-    def __init__(self, z: vec3, c: vec3, w: float = 0.0, cw: float = 0.0, dr: float = 1.0, r2: float | None = None):
+    def __init__(self, z: vec3, c: vec3, w: float = 0.0, cw: float = 0.0, dr: float = 1.0, r2: float | None = None,
+                 de: float = 0.0, trap: float = 0.0, aux: float = 0.0, vary: float = 0.0):
         self.z = z.copy()
         self.c = c.copy()
         self.w = float(w)
         self.cw = float(cw)
         self.dr = float(dr)
         self.r2 = dot(z, z) if r2 is None else float(r2)
+        self.de = float(de)
+        self.trap = float(trap)
+        self.aux = float(aux)
+        self.vary = float(vary)
 
 
 class Params:
@@ -299,6 +311,9 @@ class Param:
         return self.derived is None
 
 
+DIFS_MODES = ("difs_shape", "difs_transform")
+
+
 @dataclass
 class FormulaSpec:
     """Meta data of a registered formula."""
@@ -307,8 +322,9 @@ class FormulaSpec:
     func: Callable
     params: list[Param] = field(default_factory=list)
     #: analytic distance estimate the formula maintains in ``s.dr``:
-    #: "none" (numerical gradient DE), "linear" (|z| / dr, box type) or
-    #: "log" (0.5 |z| ln|z|^2 / dr, bulb type)
+    #: "none" (numerical gradient DE), "linear" (|z| / dr, box type),
+    #: "log" (0.5 |z| ln|z|^2 / dr, bulb type), "difs_shape" (a dIFS shape
+    #: writing s.de / s.trap) or "difs_transform" (a dIFS transform)
     de: str = "none"
     #: `dDEscale`: scale of the numerical / analytic DE
     de_scale: float = 1.0
@@ -353,6 +369,10 @@ class FormulaSpec:
             if p.derived is not None:
                 v[p.name] = float(p.derived(v))
         return v
+
+    @property
+    def is_difs(self) -> bool:
+        return self.de in DIFS_MODES
 
     def smooth_pow(self, values: dict[str, float]) -> float:
         if isinstance(self.si_pow, str):
