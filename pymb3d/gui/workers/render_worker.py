@@ -27,8 +27,8 @@ class RenderWorker(QObject):
     finished = Signal(int, object)
     #: (request id, error message)
     failed = Signal(int, str)
-    #: (request id)
-    cancelled = Signal(int)
+    #: (request id, the partial render or None)
+    cancelled = Signal(int, object)
     #: the backend was created: (device label)
     device_ready = Signal(str)
 
@@ -49,9 +49,10 @@ class RenderWorker(QObject):
             self.device_ready.emit(self._backend.info.label)
         return self._renderer
 
-    @Slot(int, object)
-    def render(self, request_id: int, scene: Scene) -> None:
-        """Renders ``scene`` (a copy owned by the worker)."""
+    @Slot(int, object, object)
+    def render(self, request_id: int, scene: Scene, resume=None) -> None:
+        """Renders ``scene`` (a copy owned by the worker), continuing a
+        cancelled render when ``resume`` is given."""
         self._abort.clear()
         self._busy = True
         try:
@@ -61,6 +62,7 @@ class RenderWorker(QObject):
                 progress=lambda f, m: self.progress.emit(request_id, f, m),
                 band=lambda y0, rgb: self.band.emit(request_id, y0, rgb),
                 abort=self._abort,
+                resume=resume,
             )
             info = renderer.backend.info
             probe = getattr(renderer.backend, "last_probe", None)
@@ -72,8 +74,8 @@ class RenderWorker(QObject):
                              scene.width * scene.height, result.seconds, result.compile_seconds, scene.shadows,
                              scene.ao.mode)
             self.finished.emit(request_id, result)
-        except RenderCancelled:
-            self.cancelled.emit(request_id)
+        except RenderCancelled as e:
+            self.cancelled.emit(request_id, getattr(e, "partial", None))
         except Exception as e:  # noqa: BLE001 - reported to the user
             self.failed.emit(request_id, f"{e}\n{traceback.format_exc(limit=3)}")
         finally:

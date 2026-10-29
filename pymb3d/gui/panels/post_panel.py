@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..scene_model import SceneModel
-from ..widgets import DoubleSpin, SliderSpin
+from ..widgets import DoubleSpin, SliderSpin, make_scroll
 
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp)"
 
@@ -114,10 +114,13 @@ class PostPanel(QWidget):
         self.contrast = SliderSpin(0.0, -1.0, 1.0, 2, 0.05)
         self.saturation = SliderSpin(0.0, -1.0, 1.0, 2, 0.05)
         self.sharpen = SliderSpin(0.0, 0.0, 2.0, 2, 0.1)
+        self.denoise = SliderSpin(0.0, 0.0, 20.0, 1, 1.0)
+        self.denoise.setToolTip("DCT noise filter (GIMP's Denoise DCT): 0 off, 4 light, higher removes more grain and detail")
         pf.addRow("brightness", self.brightness)
         pf.addRow("contrast", self.contrast)
         pf.addRow("saturation", self.saturation)
         pf.addRow("sharpen", self.sharpen)
+        pf.addRow("noise filter", self.denoise)
         lay.addWidget(post)
 
         dof = QGroupBox("Depth of field (Shift + double click sets the focus)")
@@ -133,9 +136,7 @@ class PostPanel(QWidget):
         lay.addWidget(dof)
         lay.addStretch(1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(inner)
+        scroll = make_scroll(inner)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
@@ -149,7 +150,8 @@ class PostPanel(QWidget):
         self.diffuse_combine.toggled.connect(lambda v: self._lset("diffuse_map_combine", bool(v)))
         self.roughness.valueChanged.connect(lambda v: self._lset("roughness", float(v)))
         for attr, w in (("brightness", self.brightness), ("contrast", self.contrast), ("saturation", self.saturation),
-                        ("sharpen", self.sharpen), ("dof_focus", self.dof_focus), ("dof_aperture", self.dof_aperture)):
+                        ("sharpen", self.sharpen), ("denoise", self.denoise), ("dof_focus", self.dof_focus),
+                        ("dof_aperture", self.dof_aperture)):
             w.valueChanged.connect(lambda v, a=attr: self._pset(a, float(v)))
         self.dof.toggled.connect(lambda v: self._pset("dof", bool(v)))
         self.dof_forward.toggled.connect(lambda v: self._pset("dof_forward_only", bool(v)))
@@ -177,6 +179,7 @@ class PostPanel(QWidget):
         self.contrast.set_silently(p.contrast)
         self.saturation.set_silently(p.saturation)
         self.sharpen.set_silently(p.sharpen)
+        self.denoise.set_silently(p.denoise)
         self.dof.setChecked(p.dof)
         self.dof_focus.set_silently(p.dof_focus)
         self.dof_aperture.set_silently(p.dof_aperture)

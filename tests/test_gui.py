@@ -111,11 +111,27 @@ def test_final_render_dialog(app, tmp_path):
     wait_until(lambda: dlg.result is not None, timeout=120)
     assert dlg.result.image.shape == (40, 64, 3)
     out = tmp_path / "out.png"
-    from pymb3d.gui.render_dialog import save_image
+    from pymb3d.gui.render_dialog import save_depth, save_image
+    from pymb3d.render import hit_alpha
 
     save_image(out, dlg.result.image, sc)
     back, _ = load_scene(out)
     assert back.width == 64 and back.slots[0].name == sc.slots[0].name
+    alpha = hit_alpha(dlg.result.gbuffer)
+    save_image(tmp_path / "t.png", dlg.result.image, sc, alpha=alpha)
+    from PIL import Image
+
+    with Image.open(tmp_path / "t.png") as im:
+        assert im.mode == "RGBA"
+    save_depth(tmp_path / "z.png", dlg.result.gbuffer, sc)
+    with Image.open(tmp_path / "z.png") as im:
+        assert im.mode.startswith("I")
+    # anti-aliased re-render
+    dlg.aa.setCurrentIndex(1)
+    dlg.start()
+    wait_until(lambda: dlg.result is not None, timeout=120)
+    assert dlg.result.image.shape == (40, 64, 3) and dlg.result.gbuffer.shape[:2] == (80, 128)
+    assert dlg.result.supersample == 2
     dlg.close()
 
 
@@ -175,8 +191,8 @@ def test_render_dialog_data_round_trip(app, tmp_path):
     wait_until(lambda: dlg.result is not None, timeout=120)
     p = tmp_path / "r.npz"
     save_gbuffer(p, dlg.result.gbuffer, dlg.result.scene)
-    g, back = load_gbuffer(p)
-    assert g.shape == dlg.result.gbuffer.shape and back.width == 40
+    g, back, k = load_gbuffer(p)
+    assert g.shape == dlg.result.gbuffer.shape and back.width == 40 and k == 1
     dlg.close()
 
 
@@ -277,3 +293,25 @@ def test_png16_round_trip(tmp_path):
         assert "pymb3d-scene" in (im.text or {})
         arr = np.asarray(im.convert("RGB"))
     assert np.abs(arr.astype(int) - np.rint(img * 255)).max() <= 1
+
+
+def test_open_dialog_preview_and_formula_picker(window, tmp_path):
+    from pymb3d.gui.open_dialog import SceneOpenDialog, describe
+    from pymb3d.gui.formula_picker import FormulaPickerDialog
+    from pymb3d.io import save_scene
+
+    p = tmp_path / "s.json"
+    save_scene(window.model.scene, p)
+    txt = describe(str(p))
+    assert "iterations" in txt and "Integer Power" in txt or "Amazing Box" in txt
+    dlg = SceneOpenDialog(window, str(tmp_path))
+    dlg.show_preview(str(p))
+    assert dlg.info.text()
+    dlg.close()
+    fp = FormulaPickerDialog("Amazing Box", window)
+    fp.refill("menger")
+    names = [fp.list.item(i).data(0x0100) for i in range(fp.list.count()) if fp.list.item(i).data(0x0100)]
+    assert "Menger3" in names and "Amazing Box" not in names
+    fp.list.setCurrentRow(1)
+    fp.accept()
+    assert fp.chosen in names

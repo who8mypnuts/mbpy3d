@@ -30,7 +30,8 @@ class DeviceChoice:
 
     @property
     def label(self) -> str:
-        p = {"auto": "auto precision", "float32": "single precision", "float64": "double precision"}[self.precision]
+        p = {"auto": "auto precision", "mixed": "single precision + CPU finish", "float32": "single precision",
+             "float64": "double precision"}[self.precision]
         return f"{self.backend}: {self.name} ({p}, {self.kind})"
 
 
@@ -43,6 +44,7 @@ def available_devices(probe_opengl: bool = True) -> list[DeviceChoice]:
 
         for pi, di, name, fp64, kind in list_opencl_devices():
             if fp64:
+                out.append(DeviceChoice("opencl", name, "mixed", kind, (pi, di)))
                 out.append(DeviceChoice("opencl", name, "auto", kind, (pi, di)))
                 out.append(DeviceChoice("opencl", name, "float64", kind, (pi, di)))
             out.append(DeviceChoice("opencl", name, "float32", kind, (pi, di)))
@@ -79,11 +81,11 @@ def probe_opengl_info() -> DeviceInfo | None:
 
 def _rank_final(d: DeviceChoice) -> tuple:
     if d.backend == "opencl" and d.kind == "gpu":
-        return (0, {"auto": 0, "float64": 1, "float32": 2}[d.precision])
+        return (0, {"mixed": 0, "auto": 1, "float64": 2, "float32": 3}[d.precision])
     if d.backend == "cpu":
         return (1, 0)
     if d.backend == "opencl":
-        return (3, {"auto": 0, "float64": 1, "float32": 2}[d.precision])
+        return (3, {"mixed": 0, "auto": 1, "float64": 2, "float32": 3}[d.precision])
     return (9, 0)
 
 
@@ -91,11 +93,11 @@ def _rank_preview(d: DeviceChoice) -> tuple:
     if d.backend == "opengl" and d.kind == "gpu":
         return (0, 0)
     if d.backend == "opencl" and d.kind == "gpu":
-        return (1, {"float32": 0, "auto": 1, "float64": 2}[d.precision])
+        return (1, {"float32": 0, "auto": 1, "mixed": 2, "float64": 3}[d.precision])
     if d.backend == "cpu":
         return (2, 0)
     if d.backend == "opencl":
-        return (3, {"float32": 0, "auto": 1, "float64": 2}[d.precision])
+        return (3, {"float32": 0, "auto": 1, "mixed": 2, "float64": 3}[d.precision])
     return (4, 0)  # software OpenGL
 
 

@@ -49,32 +49,45 @@ class CpuBackend(Backend):
     def _render_band(self, compiled, P, y0, rows, out, abort) -> None:  # pragma: no cover - see render()
         compiled.render_rows(P, out, y0, y0 + rows, np.zeros(1, dtype=np.int32))
 
-    def render(self, program, P, width, height, progress=None, abort=None, out=None):
+    def finish(self, program, P, out, progress=None, abort=None):
+        """Finishes the hits of a single precision G-buffer in double (see
+        ``finish_rows`` of the numba core)."""
+        return self.render(program, P, out.shape[1], out.shape[0], progress, abort, out, finish=True)
+
+    def render(self, program, P, width, height, progress=None, abort=None, out=None, finish=False,
+               done_rows=None):
         mod = self.compile(program)
+        fn = mod.finish_rows if finish else mod.render_rows
         abort = abort or threading.Event()
         if out is None:
             out = np.zeros((height, width, PL.N_CHANNELS), dtype=np.float32)
         abort_flag = np.zeros(1, dtype=np.int32)
         band = self.band_rows(width)
         bands = [(y, min(band, height - y)) for y in range(0, height, band)]
+        if done_rows is not None:
+            bands = [(y, r) for y, r in bands if not done_rows[y:y + r].all()]
         # rows are interleaved over the threads like MB3D's CalcMandT so the
         # expensive parts of an image are shared
         futures = {}
         pending = list(bands)
-        done_rows = 0
+        done_count = int(done_rows.sum()) if done_rows is not None else 0
         try:
             while pending or futures:
                 while pending and len(futures) < self.threads * 2:
                     y, rows = pending.pop(0)
-                    f = self._pool.submit(mod.render_rows, P, out, y, y + rows, abort_flag)
+                    f = self._pool.submit(fn, P, out, y, y + rows, abort_flag)
                     futures[f] = (y, rows)
                 finished, _ = wait(list(futures), timeout=0.05, return_when=FIRST_COMPLETED)
                 for f in finished:
                     y, rows = futures.pop(f)
                     f.result()
-                    done_rows += rows
+                    if done_rows is not None:
+                        done_rows[y:y + rows] = True
+                        done_count = int(done_rows.sum())
+                    else:
+                        done_count += rows
                     if progress:
-                        progress(y, rows, done_rows, height)
+                        progress(y, rows, done_count, height)
                 if abort.is_set():
                     abort_flag[0] = 1
                     pending.clear()

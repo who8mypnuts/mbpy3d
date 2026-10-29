@@ -411,3 +411,71 @@ def test_slice_2d(cpu_backend):
     assert (g[..., 0] >= 0).all()
     its = g[..., PL.G_ITER]
     assert its.max() > its.min()
+
+
+def test_mixed_precision_finish(cpu_backend, opencl_backend):
+    """A deep zoom marched in single precision and finished in double on
+    the CPU matches the CPU's own double precision render."""
+    from pymb3d.render import Renderer
+
+    deep = small_scene(48, 36)
+    deep.camera.mid = np.array([-0.56645371, 0.27057946, -0.53137482])
+    deep.camera.zoom = 3e5
+    sw = deep.camera.step_width(48)
+    deep.camera.z_start = float(deep.camera.mid[2]) - 300 * sw
+    deep.camera.z_end = float(deep.camera.mid[2]) + 3000 * sw
+    ref = gbuffer(cpu_backend, deep)
+    if not opencl_backend.double_ok:
+        pytest.skip("no double precision")
+    opencl_backend.precision_mode = "mixed"
+    r = Renderer(opencl_backend)
+    res = r.render(deep)
+    g = res.gbuffer
+    assert opencl_backend.needs_finish or opencl_backend.last_probe.single_ok
+    hit_ref, hit = ref[..., 0] >= 0, g[..., 0] >= 0
+    assert (hit_ref != hit).mean() < 0.05
+    both = hit_ref & hit
+    if both.any():
+        ds = deep.de_stop * (1.0 + ref[..., 0][both] * 0.0)
+        assert np.median(np.abs(ref[..., 0][both] - g[..., 0][both])) < 2.0
+    opencl_backend.precision_mode = "auto"
+
+
+def test_dct_denoise_reduces_noise():
+    from pymb3d.render.post import dct_denoise
+
+    rng = np.random.default_rng(0)
+    clean = np.zeros((40, 48, 3), dtype=np.float32)
+    clean[:, :24] = 0.3
+    clean[:, 24:] = 0.7
+    noisy = np.clip(clean + rng.normal(0, 0.05, clean.shape).astype(np.float32), 0, 1)
+    den = dct_denoise(noisy, 8.0)
+    assert den.shape == clean.shape
+    assert np.abs(den - clean).mean() < np.abs(noisy - clean).mean() * 0.7
+
+
+def test_render_resume(cpu_backend):
+    from pymb3d.backends.base import RenderCancelled
+    from pymb3d.render import Renderer
+
+    sc = small_scene(64, 64)
+    sc.iterations = 20
+    abort = threading.Event()
+    r = Renderer(cpu_backend)
+
+    def progress(f, m):
+        if f > 0.3:
+            abort.set()
+
+    try:
+        r.render(sc, progress=progress, abort=abort)
+        partial = None
+    except RenderCancelled as e:
+        partial = e.partial
+    assert partial is not None and 0.0 < partial.fraction < 1.0
+    done_before = partial.done_rows.copy()
+    res = Renderer(cpu_backend).render(sc, resume=partial)
+    assert res.image.shape == (64, 64, 3)
+    full = Renderer(cpu_backend).render(sc)
+    assert np.array_equal(res.gbuffer[done_before], full.gbuffer[done_before])
+    assert np.array_equal(res.image, full.image)

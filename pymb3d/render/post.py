@@ -88,6 +88,43 @@ def sharpen(img: np.ndarray, amount: float) -> np.ndarray:
     return img + (img - blurred) * amount
 
 
+def dct_denoise(img: np.ndarray, strength: float) -> np.ndarray:
+    """DCT denoising (GIMP's Denoise DCT): overlapping 8x8 blocks are
+    transformed, small coefficients dropped, the blocks averaged back.
+    ``strength`` ~ 1..20 (4 is light)."""
+    from numpy.lib.stride_tricks import sliding_window_view
+    from scipy.fft import dctn, idctn
+
+    if strength <= 0:
+        return img
+    x = img.astype(np.float32)
+    H, W, C = x.shape
+    B, S = 8, 2
+    if H < B or W < B:
+        return img
+    pad_h = (-(H - B)) % S
+    pad_w = (-(W - B)) % S
+    xp = np.pad(x, ((0, pad_h + B), (0, pad_w + B), (0, 0)), mode="reflect")
+    out = np.zeros_like(xp)
+    weight = np.zeros(xp.shape[:2], dtype=np.float32)
+    thr = strength * 0.015
+    for c in range(C):
+        win = sliding_window_view(xp[..., c], (B, B))[::S, ::S]          # (nh, nw, B, B)
+        coef = dctn(win, axes=(-2, -1), norm="ortho")
+        dc = coef[..., 0, 0].copy()
+        coef = np.where(np.abs(coef) < thr, 0.0, coef)
+        coef[..., 0, 0] = dc
+        rec = idctn(coef, axes=(-2, -1), norm="ortho")
+        nh, nw = rec.shape[:2]
+        for i in range(B):
+            for j in range(B):
+                out[i:i + nh * S:S, j:j + nw * S:S, c] += rec[:, :, i, j]
+                if c == 0:
+                    weight[i:i + nh * S:S, j:j + nw * S:S] += 1.0
+    out = out / np.maximum(weight, 1.0)[..., None]
+    return out[:H, :W]
+
+
 def post_process(img: np.ndarray, gbuf: np.ndarray | None, scene: Scene,
                  full_size: tuple[int, int] | None = None) -> np.ndarray:
     """All post processing on a float 0..1 image; returns float 0..1."""
@@ -97,6 +134,8 @@ def post_process(img: np.ndarray, gbuf: np.ndarray | None, scene: Scene,
         out = depth_of_field(out, gbuf[..., PL.G_DEPTH].astype(np.float64), scene, full_size)
     if p.brightness or p.contrast or p.saturation:
         out = color_adjust(out, p)
+    if p.denoise > 0:
+        out = dct_denoise(out, p.denoise)
     if p.sharpen > 0:
         out = sharpen(out, p.sharpen)
     return np.clip(out, 0.0, 1.0)

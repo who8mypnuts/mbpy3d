@@ -90,25 +90,42 @@ class Backend(ABC):
 
     def render(self, program: Program, P: np.ndarray, width: int, height: int,
                progress: ProgressFn | None = None, abort: threading.Event | None = None,
-               out: np.ndarray | None = None) -> np.ndarray:
+               out: np.ndarray | None = None, done_rows: np.ndarray | None = None) -> np.ndarray:
         """The G-buffer (height, width, N_CHANNELS) float32 of the rectangle
-        the parameter block describes (written into ``out`` if given)."""
+        the parameter block describes (written into ``out`` if given).
+        ``done_rows`` (bool per row) resumes a render: finished rows are
+        skipped and the array is updated."""
         compiled = self.compile(program)
         abort = abort or threading.Event()
         if out is None:
             out = np.zeros((height, width, PL.N_CHANNELS), dtype=np.float32)
         band = max(1, self.band_rows(width))
         y = 0
+        total_done = int(done_rows.sum()) if done_rows is not None else 0
         while y < height:
             if abort.is_set():
                 raise RenderCancelled()
             rows = min(band, height - y)
+            if done_rows is not None:
+                if done_rows[y:y + rows].all():
+                    y += rows
+                    continue
+                # trim to the first undone row
+                while rows > 0 and done_rows[y]:
+                    y += 1
+                    rows -= 1
+                rows = min(rows, height - y)
             t0 = time.perf_counter()
             self._render_band(compiled, P, y, rows, out, abort)
             dt = time.perf_counter() - t0
+            if done_rows is not None:
+                done_rows[y:y + rows] = True
+                total_done = int(done_rows.sum())
+            else:
+                total_done = y + rows
             y += rows
             if progress:
-                progress(y - rows, rows, y, height)
+                progress(y - rows, rows, total_done, height)
             if self.band_target_seconds > 0 and dt > 0:
                 # adapt the band to the measured speed (bounded growth)
                 want = rows * self.band_target_seconds / dt

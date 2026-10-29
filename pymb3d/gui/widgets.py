@@ -135,3 +135,16 @@ class ColorButton(QPushButton):
 def form_row(form: QFormLayout, label: str, widget: QWidget) -> QWidget:
     form.addRow(label, widget)
     return widget
+
+
+def make_scroll(inner: QWidget):
+    """A vertical scroll area that never scrolls sideways: the inner widget
+    follows the width of the panel."""
+    from PySide6.QtWidgets import QScrollArea, QSizePolicy
+
+    inner.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setWidget(inner)
+    return scroll

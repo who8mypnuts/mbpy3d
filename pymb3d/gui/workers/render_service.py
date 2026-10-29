@@ -22,11 +22,12 @@ class RenderService(QObject):
     #: RenderResult of the current request
     finished = Signal(object)
     failed = Signal(str)
-    cancelled = Signal()
+    #: the partial render (resumable) or None
+    cancelled = Signal(object)
     device_ready = Signal(str)
     #: the service became idle (no render running, nothing pending)
     idle = Signal()
-    _request = Signal(int, object)
+    _request = Signal(int, object, object)
 
     def __init__(self, choice: DeviceChoice, options: RenderOptions | None = None, name: str = "render") -> None:
         super().__init__()
@@ -34,6 +35,8 @@ class RenderService(QObject):
         self._thread = QThread()
         self._thread.setObjectName(f"pymb3d-{name}")
         self._worker = RenderWorker(choice, options)
+        #: the render options (shared with the worker's renderer; change in place)
+        self.options = self._worker.options
         self._worker.moveToThread(self._thread)
         self._request.connect(self._worker.render)
         self._worker.progress.connect(self._on_progress)
@@ -52,13 +55,14 @@ class RenderService(QObject):
     def busy(self) -> bool:
         return self._current is not None
 
-    def submit(self, scene: Scene) -> None:
-        """Render ``scene`` as soon as possible, cancelling a running render."""
+    def submit(self, scene: Scene, resume=None) -> None:
+        """Render ``scene`` as soon as possible, cancelling a running render;
+        ``resume`` continues a cancelled render."""
         if self._current is not None:
-            self._pending = scene.copy()
+            self._pending = (scene.copy(), resume)
             self._worker.cancel()
             return
-        self._start(scene.copy())
+        self._start(scene.copy(), resume)
 
     def cancel(self) -> None:
         self._pending = None
@@ -71,16 +75,16 @@ class RenderService(QObject):
         self._thread.wait(5000)
 
     # ------------------------------------------------------------- internals
-    def _start(self, scene: Scene) -> None:
+    def _start(self, scene: Scene, resume=None) -> None:
         self._next_id += 1
         self._current = self._next_id
-        self._request.emit(self._current, scene)
+        self._request.emit(self._current, scene, resume)
 
     def _finish_request(self) -> None:
         self._current = None
         if self._pending is not None:
-            scene, self._pending = self._pending, None
-            self._start(scene)
+            (scene, resume), self._pending = self._pending, None
+            self._start(scene, resume)
         else:
             self.idle.emit()
 
@@ -106,8 +110,8 @@ class RenderService(QObject):
             self.failed.emit(msg)
         self._finish_request()
 
-    @Slot(int)
-    def _on_cancelled(self, rid: int) -> None:
+    @Slot(int, object)
+    def _on_cancelled(self, rid: int, partial) -> None:
         if rid == self._current:
-            self.cancelled.emit()
+            self.cancelled.emit(partial)
         self._finish_request()

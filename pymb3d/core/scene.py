@@ -92,6 +92,7 @@ class PostSettings:
     contrast: float = 0.0       # -1..1
     saturation: float = 0.0     # -1..1
     sharpen: float = 0.0        # 0..2
+    denoise: float = 0.0        # 0 = off, 1..20 (DCT noise filter strength)
     dof: bool = False
     #: focus as a fraction of the depth range 0 (start plane) .. 1 (far end)
     dof_focus: float = 0.3
@@ -165,6 +166,7 @@ class Scene:
     lighting: Lighting = field(default_factory=Lighting)
     post: PostSettings = field(default_factory=PostSettings)
     title: str = ""
+    author: str = ""
     #: folder of the file the scene came from (for maps with relative names), not stored
     base_dir: str = ""
 
@@ -190,6 +192,7 @@ class Scene:
         return {
             "format": "pymb3d-scene-1",
             "title": self.title,
+            "author": self.author,
             "width": self.width,
             "height": self.height,
             "camera": self.camera.to_dict(),
@@ -230,6 +233,7 @@ class Scene:
     def from_dict(cls, d: dict) -> "Scene":
         s = cls()
         s.title = str(d.get("title", ""))
+        s.author = str(d.get("author", ""))
         s.width = int(d.get("width", s.width))
         s.height = int(d.get("height", s.height))
         s.camera = Camera.from_dict(d.get("camera", {}))

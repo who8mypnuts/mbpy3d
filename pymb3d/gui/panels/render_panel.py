@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from ...backends.detect import DeviceChoice
 from ..scene_model import SceneModel
-from ..widgets import DoubleSpin, IntSpin
+from ..widgets import DoubleSpin, IntSpin, make_scroll
 
 
 class RenderPanel(QWidget):
@@ -31,17 +31,14 @@ class RenderPanel(QWidget):
         self.model = model
         self.devices = devices
         self._loading = False
-        lay = QVBoxLayout(self)
+        inner = QWidget()
+        lay = QVBoxLayout(inner)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(make_scroll(inner))
 
-        size = QGroupBox("Image")
+        size = QGroupBox("Preview and stereo")
         sf = QFormLayout(size)
-        self.width = IntSpin(640, 8, 32767)
-        self.height = IntSpin(480, 8, 32767)
-        r = QHBoxLayout()
-        r.addWidget(self.width)
-        r.addWidget(QLabel("x"))
-        r.addWidget(self.height)
-        sf.addRow("final size", r)
         self.preview_width = IntSpin(480, 64, 2048)
         self.preview_width.setToolTip("Width of the interactive preview (height follows the aspect ratio)")
         sf.addRow("preview width", self.preview_width)
@@ -126,8 +123,6 @@ class RenderPanel(QWidget):
         lay.addWidget(dev)
         lay.addStretch(1)
 
-        self.width.valueChanged.connect(lambda v: self._set("width", int(v), "size"))
-        self.height.valueChanged.connect(lambda v: self._set("height", int(v), "size"))
         self.preview_width.valueChanged.connect(lambda v: self.preview_width_changed.emit(int(v)))
         self.preview_quality.valueChanged.connect(lambda v: self.preview_quality_changed.emit(float(v)))
         self.de_stop.valueChanged.connect(lambda v: self._set("de_stop", float(v)))
@@ -164,8 +159,6 @@ class RenderPanel(QWidget):
     def load(self) -> None:
         self._loading = True
         sc = self.model.scene
-        self.width.set_silently(sc.width)
-        self.height.set_silently(sc.height)
         self.de_stop.set_silently(sc.de_stop)
         self.z_step_div.set_silently(sc.z_step_div)
         self.raystep_limiter.set_silently(sc.raystep_limiter)

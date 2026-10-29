@@ -270,3 +270,34 @@ def abox_mod1(s, p):
         m = sc / rr
     s.dr = s.dr * fabs(m)
     s.z = f * m + s.c
+
+
+def build_rot_matrix_4d(angles_deg: list[float]) -> list[float]:
+    """MB3D's `BuildRotMatrix4d` of a `6SingleAngles` option (angles yz,
+    xz, xy, xw, yw, zw in degrees), row major 4x4."""
+    import math as _m
+
+    i1 = [1, 0, 0, 0, 1, 2]
+    i2 = [2, 2, 1, 3, 3, 3]
+    ms4 = [[1.0 if a == b else 0.0 for b in range(4)] for a in range(4)]
+    for i in range(6):
+        a = _m.radians(angles_deg[i])
+        s1, c1 = _m.sin(a), _m.cos(a)
+        sm4 = [[1.0 if a_ == b else 0.0 for b in range(4)] for a_ in range(4)]
+        sm4[i1[i]][i1[i]] = c1
+        sm4[i2[i]][i2[i]] = c1
+        sm4[i1[i]][i2[i]] = -s1
+        sm4[i2[i]][i1[i]] = s1
+        ms4 = [[sum(sm4[a_][k] * ms4[k][b] for k in range(4)) for b in range(4)] for a_ in range(4)]
+    return [ms4[a_][b] for a_ in range(4) for b in range(4)]
+
+
+def rotation4d_params(prefix: str, label: str = "rotation") -> list:
+    """Six editable angles (degrees, planes yz xz xy xw yw zw) and the 16
+    derived entries of the 4D rotation matrix."""
+    names = ["yz", "xz", "xy", "xw", "yw", "zw"]
+    out = [Param(f"{prefix}_{n}", 0.0, "real", f"{label} {n} (degrees)") for n in names]
+    for k in range(16):
+        out.append(Param(f"{prefix}_m{k}", 1.0 if k in (0, 5, 10, 15) else 0.0,
+                         derived=lambda v, k=k, p=prefix, ns=names: build_rot_matrix_4d([v[f"{p}_{n}"] for n in ns])[k]))
+    return out

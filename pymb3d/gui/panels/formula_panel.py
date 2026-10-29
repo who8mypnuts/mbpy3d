@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -19,7 +20,7 @@ from ...core.scene import MAX_SLOTS, DeCombination, FormulaSlot
 from ...formulas import registry
 from ...formulas.catalog import catalog
 from ..scene_model import SceneModel
-from ..widgets import DoubleSpin, IntSpin
+from ..widgets import DoubleSpin, IntSpin, make_scroll
 
 NONE = "(none)"
 
@@ -33,6 +34,8 @@ class SlotEditor(QGroupBox):
         self.model = model
         self._loading = False
         self.combo = QComboBox()
+        self.combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo.setMinimumContentsLength(12)
         self.combo.addItem(NONE)
         df = catalog()
         for cat in df["category"].unique().sort().to_list():
@@ -40,8 +43,13 @@ class SlotEditor(QGroupBox):
                 self.combo.addItem(f"{name}", name)
         self.iters = IntSpin(1, 0, 10000)
         self.iters.setToolTip("Consecutive iterations of this formula (0 disables the slot)")
+        pick = QPushButton("...")
+        pick.setFixedWidth(28)
+        pick.setToolTip("Browse the formulas by category with a search box")
+        pick.clicked.connect(self._pick)
         top = QHBoxLayout()
         top.addWidget(self.combo, 1)
+        top.addWidget(pick)
         top.addWidget(QLabel("x"))
         top.addWidget(self.iters)
         self.params_box = QWidget()
@@ -124,6 +132,13 @@ class SlotEditor(QGroupBox):
             self._build_params(spec, s.params)
         self.model.touch("formulas")
 
+    def _pick(self) -> None:
+        from ..formula_picker import FormulaPickerDialog
+
+        dlg = FormulaPickerDialog(self.combo.currentData(), self)
+        if dlg.exec() and dlg.chosen:
+            self.combo.setCurrentIndex(max(0, self.combo.findData(dlg.chosen)))
+
     def _iters_changed(self, v: int) -> None:
         if self._loading:
             return
@@ -164,6 +179,7 @@ class FormulaPanel(QWidget):
         jl = QHBoxLayout()
         self.julia_c = [DoubleSpin(0.0, -100, 100, 6, 0.01) for _ in range(4)]
         for sp in self.julia_c:
+            sp.setMinimumWidth(50)
             jl.addWidget(sp)
         form.addRow("max iterations", self.iterations)
         form.addRow("min iterations", self.min_iterations)
@@ -172,11 +188,12 @@ class FormulaPanel(QWidget):
         form.addRow(self.analytic)
         form.addRow(self.julia)
         form.addRow("Julia seed x y z w", jl)
-        self.ipol = QCheckBox("interpolation hybrid: blend slots 1 and 2 every iteration with the weights")
+        self.ipol = QCheckBox("interpolation hybrid (slots 1 + 2, weights)")
         self.ipol_w = [DoubleSpin(0.5, 0.0, 1e6, 3, 0.05) for _ in range(2)]
         il = QHBoxLayout()
         il.addWidget(self.ipol)
         for sp in self.ipol_w:
+            sp.setMinimumWidth(50)
             il.addWidget(sp)
         form.addRow(il)
         lay.addWidget(general)
@@ -218,9 +235,7 @@ class FormulaPanel(QWidget):
         for e in self.editors:
             lay.addWidget(e)
         lay.addStretch(1)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(inner)
+        scroll = make_scroll(inner)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)

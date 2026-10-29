@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QCheckBox, QFormLayout, QGroupBox, QHBoxLayout, QP
 
 from ...core.camera import Camera
 from ..scene_model import SceneModel
-from ..widgets import DoubleSpin
+from ..widgets import DoubleSpin, make_scroll
 
 
 class CameraPanel(QWidget):
@@ -17,13 +17,18 @@ class CameraPanel(QWidget):
         super().__init__(parent)
         self.model = model
         self._loading = False
-        lay = QVBoxLayout(self)
+        inner = QWidget()
+        lay = QVBoxLayout(inner)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(make_scroll(inner))
 
         pos = QGroupBox("Position and view")
         form = QFormLayout(pos)
         self.mid = [DoubleSpin(0.0, -1e9, 1e9, 9, 0.01) for _ in range(3)]
         row = QHBoxLayout()
         for sp in self.mid:
+            sp.setMinimumWidth(60)
             row.addWidget(sp)
         form.addRow("midpoint x y z", row)
         self.zoom = DoubleSpin(1.0, 1e-12, 1e15, 6, 0.1)

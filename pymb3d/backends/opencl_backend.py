@@ -2,7 +2,10 @@
 
 Precision: ``"auto"`` (default) marches in single precision when the
 precision probe (:mod:`precision`) finds no difference to double on a
-coarse version of the image, ``"float32"`` / ``"float64"`` force one.
+coarse version of the image, ``"mixed"`` always marches in single
+precision and, when the probe finds differences, asks the renderer to
+finish the hits in double on the CPU (``needs_finish``), ``"float32"`` /
+``"float64"`` force one.
 Runs on NVIDIA, AMD, Intel and Apple devices and on CPU OpenCL runtimes
 (pocl, Intel).
 """
@@ -72,12 +75,14 @@ class OpenCLBackend(Backend):
         self.platform = platforms[platform_index]
         self.double_ok = ("cl_khr_fp64" in self.device.extensions
                           or getattr(self.device, "double_fp_config", 0) != 0)
-        if precision not in ("auto", "float32", "float64"):
+        if precision not in ("auto", "mixed", "float32", "float64"):
             raise BackendError(f"unknown precision {precision}")
         if precision == "float64" and not self.double_ok:
             precision = "float32"
-        if precision == "auto" and not self.double_ok:
+        if precision in ("auto", "mixed") and not self.double_ok:
             precision = "float32"
+        #: set by the probe in "mixed" mode: the CPU should finish the hits in double
+        self.needs_finish = False
         self.precision_mode = precision
         self.ctx = cl.Context(devices=[self.device])
         self.queue = cl.CommandQueue(self.ctx)
@@ -86,7 +91,7 @@ class OpenCLBackend(Backend):
         self.last_probe: prec.ProbeResult | None = None
         self.last_precision = "float64" if precision == "float64" else "float32"
         kind = "gpu" if self.device.type & cl.device_type.GPU else "cpu"
-        label = {"auto": "auto precision", "float32": "float32", "float64": "float64"}[precision]
+        label = {"auto": "auto precision", "mixed": "mixed precision", "float32": "float32", "float64": "float64"}[precision]
         self._info = DeviceInfo("opencl", self.device.name.strip(), label, kind, self.platform.name.strip())
 
     @property
@@ -114,9 +119,9 @@ class OpenCLBackend(Backend):
 
     def _compile(self, program: Program) -> dict[str, _Compiled]:
         out = {}
-        if self.precision_mode in ("auto", "float32"):
+        if self.precision_mode in ("auto", "mixed", "float32"):
             out["float32"] = self._build(program, False)
-        if self.precision_mode in ("auto", "float64"):
+        if self.precision_mode in ("auto", "mixed", "float64"):
             out["float64"] = self._build(program, True)
         return out
 
@@ -150,7 +155,8 @@ class OpenCLBackend(Backend):
 
     def choose_precision(self, program: Program, P: np.ndarray, width: int, height: int) -> _Compiled:
         """The compiled variant for this render (runs the probe in auto mode)."""
-        if self.precision_mode != "auto":
+        self.needs_finish = False
+        if self.precision_mode not in ("auto", "mixed"):
             self.last_precision = self.precision_mode
             self.last_probe = None
             return self._variant(program, self.precision_mode)
@@ -158,13 +164,17 @@ class OpenCLBackend(Backend):
         single = self._launch(self._variant(program, "float32"), Pp, w, h)
         double = self._launch(self._variant(program, "float64"), Pp, w, h)
         self.last_probe = prec.compare(single, double, float(P[PL.P_DE_STOP]), float(P[PL.P_DE_STOP_FACTOR]))
+        if self.precision_mode == "mixed":
+            self.needs_finish = not self.last_probe.single_ok
+            self.last_precision = "float32" + (" + CPU finish" if self.needs_finish else "")
+            return self._variant(program, "float32")
         self.last_precision = "float32" if self.last_probe.single_ok else "float64"
         return self._variant(program, self.last_precision)
 
-    def render(self, program, P, width, height, progress=None, abort=None, out=None):
+    def render(self, program, P, width, height, progress=None, abort=None, out=None, done_rows=None):
         self._active = self.choose_precision(program, P, width, height)
         try:
-            return super().render(program, P, width, height, progress, abort, out)
+            return super().render(program, P, width, height, progress, abort, out, done_rows)
         finally:
             self._active = None
 

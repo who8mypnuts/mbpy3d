@@ -10,9 +10,23 @@ from ...stats import benchmark
 
 
 class InfoPanel(QWidget):
-    def __init__(self, devices: list[DeviceChoice], parent: QWidget | None = None) -> None:
+    def __init__(self, devices: list[DeviceChoice], parent: QWidget | None = None, model=None) -> None:
         super().__init__(parent)
+        self.model = model
         lay = QVBoxLayout(self)
+        if model is not None:
+            from PySide6.QtWidgets import QFormLayout, QLineEdit
+
+            form = QFormLayout()
+            self.title = QLineEdit()
+            self.author = QLineEdit()
+            form.addRow("title", self.title)
+            form.addRow("author", self.author)
+            lay.addLayout(form)
+            self.title.editingFinished.connect(lambda: setattr(model.scene, "title", self.title.text()))
+            self.author.editingFinished.connect(lambda: setattr(model.scene, "author", self.author.text()))
+            model.replaced.connect(self.load)
+            self.load()
         lay.addWidget(QLabel("<b>Compute devices</b>"))
         self.devices = QPlainTextEdit()
         self.devices.setReadOnly(True)
@@ -32,6 +46,11 @@ class InfoPanel(QWidget):
         refresh.clicked.connect(self.refresh_history)
         lay.addWidget(refresh)
         self.refresh_history()
+
+    def load(self) -> None:
+        if self.model is not None:
+            self.title.setText(self.model.scene.title)
+            self.author.setText(self.model.scene.author)
 
     def show_result(self, res: RenderResult) -> None:
         lines = [f"{res.width} x {res.height} on {res.backend}", f"{res.seconds:.2f} s"]

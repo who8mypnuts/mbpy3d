@@ -107,8 +107,18 @@ here render to MB3D's look.
   `QThread`, one per backend) cancels a running render when a newer request
   arrives ("latest wins").  The UI thread never blocks.
 * The final render window uses its own worker thread and the chosen precise
-  device, shows rows as they arrive and saves PNG (with the scene embedded as
-  metadata, so a PNG can be opened as a scene again) or JPEG.
+  device, shows rows as they arrive (with an ETA), supports 1x/2x/3x
+  supersampling, transparent and 16 bit PNG, a Z-buffer image, "copy to
+  clipboard", saving / loading render data and **re-lighting** the finished
+  G-buffer without marching again.  A cancelled render keeps its finished
+  rows and can be **resumed**.
+* The main window has MB3D's menus (File / Edit / View / Render / Tools /
+  Prefs / Help), a toolbar, the image size bar (width, height, aspect lock,
+  ½ / ×2, *Calculate 3D*), a messages dock, hotkeys `Ctrl+1..9` for the tool
+  windows, a scene open dialog with thumbnail preview, a searchable formula
+  picker and eight colour themes (glossy dark, graphite, midnight, ember,
+  forest, daylight, high contrast, system; *Prefs > Theme*).  Layout, theme
+  and recent files persist in `QSettings`.
 * `Edit > Paste parameters` accepts MB3D text parameters
   (`Mandelbulb3Dv18{...}`) or pymb3d JSON from the clipboard.
 
@@ -127,7 +137,9 @@ precision**: before a render it marches a coarse version of the image
 (every k-th pixel) in both precisions and compares hits, depths and colour
 indices (`backends/precision.py`); single precision is used unless they
 differ (deep zooms).  The devices list also offers fixed single / double
-precision.  Kernel launches are sized adaptively to about 0.1 s so the
+precision and **mixed** precision: the GPU marches in single precision and
+the numba CPU re-finishes every hit in double (`finish_rows`), so consumer
+cards keep their speed while the surface positions stay exact.  Kernel launches are sized adaptively to about 0.1 s so the
 display driver stays responsive and progress / cancellation are quick; the
 coarse preview pass skips shadows and occlusion.  Render timings are recorded with polars
 (`stats/benchmark.py`, `~/.cache/pymb3d/render_history.parquet`) and shown
@@ -161,8 +173,9 @@ combination compiles once per machine.
   `M3Maps` folder next to a parameter file.
 * **Depth of field** (layered blur by the distance from the focus plane,
   Shift + double click sets the focus), **post processing** (brightness,
-  contrast, saturation, sharpen), **stereo pairs** (side by side, cross-eyed,
-  anaglyph), **16 bit PNG**.
+  contrast, saturation, sharpen, a DCT **denoiser** for Monte Carlo
+  passes), **stereo pairs** (side by side, cross-eyed, anaglyph), **16 bit
+  PNG**.
 * **Navigator window** (MB3D's Navigator): a fast own preview with move /
   turn / roll buttons, step and angle sizes, continuous flight, mouse and
   keyboard navigation, live transfer of the camera to the main window.
@@ -186,10 +199,10 @@ combination compiles once per machine.
 MB3D's internal formulas ported from `formulas.pas`: Integer Power (2..8),
 Real Power, Quaternion, Tricorn, Amazing Box, Bulbox, Folding Int Pow,
 Aexion C.  Custom formulas re-implemented from their `.m3f` machine code
-(names match, so `.m3p` files find them): Menger3, MengerIFS, Amazing Surf,
-ABoxMod1, ABoxModKali, genIFS, SphereIFS, boxIFS, cylinderIFS,
-transformIFS, _Rotate, _RotateC, _Translate, _PolyFold-sym,
-_SphereFolding1; plus Mandelbulb IQ, ABox Mod, Sierpinski3, Octahedral KIFS
+(names match, so `.m3p` files find them): Menger3, MengerIFS, Menger4 (4D),
+SierpHilbert, Amazing Surf, ABoxMod1, ABoxModKali, genIFS, SphereIFS,
+boxIFS, cylinderIFS, transformIFS, _Rotate, _RotateC, _Translate,
+_PolyFold-sym, _SphereFolding1; plus Mandelbulb IQ, ABox Mod, Sierpinski3, Octahedral KIFS
 and a Sphere Inversion transform.  The rest of MB3D's 460 `.m3f` formulas are x86
 machine code and are ported one by one.
 
@@ -197,5 +210,5 @@ machine code and are ported one by one.
 
 Full Monte Carlo path tracing with transparency (the MC renderer here does
 sky visibility and mirror reflections), MB3D's exact volumetric light maps,
-hotkey configuration, the remaining `.m3f` formulas, a wgpu/WebGPU backend,
-finishing single precision GPU hits in double on the CPU.
+hotkey configuration, interface scaling and language files, the remaining
+`.m3f` formulas, a wgpu/WebGPU backend, map sequences for animations.

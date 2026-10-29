@@ -64,6 +64,11 @@ def batch_cli(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in ("-h", "--help"):
+        print("usage: pymb3d [scene]            open the GUI (optionally with a scene)\n"
+              "       pymb3d render SCENE -o OUT.png [--width W] [--height H] [--backend B]\n"
+              "       pymb3d batch FILES... -o DIR [--width W] [--backend B]")
+        return 0
     if argv and argv[0] == "batch":
         p = argparse.ArgumentParser(prog="pymb3d batch")
         p.add_argument("files", nargs="+")

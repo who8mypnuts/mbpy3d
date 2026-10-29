@@ -1,4 +1,4 @@
-from .renderer import Renderer, RenderResult, RenderOptions, relight
+from .renderer import PartialRender, Renderer, RenderResult, RenderOptions, relight, relight_float, downscale, hit_alpha
 from .shading import shade, to_uint8, ShadeOptions
 
-__all__ = ["Renderer", "RenderResult", "RenderOptions", "relight", "shade", "to_uint8", "ShadeOptions"]
+__all__ = ["PartialRender", "Renderer", "RenderResult", "RenderOptions", "relight", "relight_float", "downscale", "hit_alpha", "shade", "to_uint8", "ShadeOptions"]

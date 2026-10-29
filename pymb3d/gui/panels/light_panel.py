@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from ...core.lights import Lighting
 from ...render.shading import palette_lookup
 from ..scene_model import SceneModel
-from ..widgets import ColorButton, DoubleSpin, IntSpin, SliderSpin, numpy_to_pixmap
+from ..widgets import ColorButton, DoubleSpin, IntSpin, SliderSpin, make_scroll, numpy_to_pixmap
 
 
 class LightEditor(QWidget):
@@ -321,10 +321,7 @@ class LightPanel(QWidget):
         self.global_editor = GlobalLightEditor(model)
         self.palette_editor = PaletteEditor(model)
         for w, name in ((self.light_editor, "Lights"), (self.global_editor, "Global"), (self.palette_editor, "Palette")):
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setWidget(w)
-            tabs.addTab(scroll, name)
+            tabs.addTab(make_scroll(w), name)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(tabs)

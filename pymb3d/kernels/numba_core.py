@@ -741,6 +741,53 @@ def shade_pixel(pxl, pyl, P, out, row, col):
 
 
 @njit(cache=True, nogil=True, fastmath=False, error_model="numpy")
+def finish_pixel(pxl, pyl, P, out, row, col):
+    """Finishes a pixel marched in single precision elsewhere: from its
+    depth the march continues in double (a few steps back), then the
+    depth, normal, roughness, colour and orbit trap are replaced.  The
+    AO, shadow, step and reflection channels stay."""
+    d = out[row, col, G_DEPTH]
+    if d < 0.0:
+        return
+    mode = int(P[P_DE_MODE])
+    ox, oy, oz, dx, dy, dz = pixel_ray(pxl, pyl, P)
+    ds = de_stop_at(d, P)
+    t0 = max(0.0, d - 3.0 * ds)
+    invert = int(P[P_INSIDE_MODE]) == 1
+    hit, at_start, t, px, py, pz, steps, r, invert, vol_acc = march_ray(
+        ox + dx * t0, oy + dy * t0, oz + dz * t0, dx, dy, dz, t0, invert, pxl, pyl, P)
+    if not hit:
+        out[row, col, G_DEPTH] = -1.0
+        return
+    out[row, col, G_DEPTH] = t
+    ds = de_stop_at(t, P)
+    out[row, col, G_ITER] = float(r[1])
+    out[row, col, G_OTRAP] = orbit_trap_value(r, ds, mode, P)
+    out[row, col, G_COLOR] = color_index(r, ds, mode, P)
+    nx, ny, nz, rough = surface_normal(px, py, pz, t, invert, P)
+    out[row, col, G_NX] = nx
+    out[row, col, G_NY] = ny
+    out[row, col, G_NZ] = nz
+    out[row, col, G_ROUGH] = rough
+
+
+@njit(cache=True, nogil=True, fastmath=False, error_model="numpy")
+def finish_rows(P, out, y0, y1, abort):
+    rx = P[P_RECT_X]
+    ry = P[P_RECT_Y]
+    step = P[P_PIXEL_STEP]
+    w = out.shape[1]
+    done = 0
+    for y in range(y0, y1):
+        if abort[0] != 0:
+            break
+        for x in range(w):
+            finish_pixel(float(x) * step + rx, float(y) * step + ry, P, out, y, x)
+        done += 1
+    return done
+
+
+@njit(cache=True, nogil=True, fastmath=False, error_model="numpy")
 def render_rows(P, out, y0, y1, abort):
     """Rows y0..y1 (local to the rectangle) into out[y, x, channel].
     ``abort[0] != 0`` stops after the current row; returns the rows done."""
